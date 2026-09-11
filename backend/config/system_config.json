@@ -1,0 +1,59 @@
+{
+  "system": {
+    "worker_id": "windows_primary",
+    "os_type": "windows",
+    "version": "1.0.0",
+    "config_version": "1"
+  },
+  "ollama": {
+    "base_url": "http://localhost:11434",
+    "request_timeout_sec": 300,
+    "keep_alive_background": "0",
+    "keep_alive_endpoint": "15m"
+  },
+  "api": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "cors_origins": ["http://localhost:5173", "http://localhost:8000", "https://*.trycloudflare.com"],
+    "jwt_secret_env": "SENTINEL_JWT_SECRET",
+    "token_expiry_hours": 720
+  },
+  "cloudflare_tunnel": {
+    "enabled": false,
+    "tunnel_token_env": "SENTINEL_CF_TOKEN"
+  },
+  "scheduler": {
+    "poll_interval_sec": 5,
+    "lease_duration_sec": 300,
+    "lease_heartbeat_sec": 60,
+    "aging_boost_per_hour": 1.0,
+    "max_task_retries": 5
+  },
+  "watchdog": {
+    "heartbeat_check_interval_sec": 30,
+    "component_restart_max": 3,
+    "component_restart_window_sec": 300,
+    "circuit_breaker_cooldown_sec": 600
+  },
+  "storage": {
+    "workspace_root": "workspace",
+    "max_workspace_size_mb": 2048,
+    "max_file_size_mb": 100,
+    "max_files_per_task": 500,
+    "tmpfs_max_mb": 512,
+    "janitor_run_day": "sunday",
+    "janitor_run_hour": 3,
+    "sandbox_ttl_days": 7
+  },
+  "web_push": {
+    "enabled": false,
+    "vapid_public_key_env": "SENTINEL_VAPID_PUBLIC",
+    "vapid_private_key_env": "SENTINEL_VAPID_PRIVATE",
+    "vapid_email": "admin@sentinel.local"
+  },
+  "telemetry": {
+    "hardware_sample_interval_sec": 10,
+    "hourly_rollup_enabled": true,
+    "daily_rollup_enabled": true
+  }
+}

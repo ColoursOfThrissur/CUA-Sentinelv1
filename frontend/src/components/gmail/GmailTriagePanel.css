@@ -1,0 +1,55 @@
+.gmail-triage-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.gmail-triage-scroll-container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: calc(100vh - 240px);
+  min-height: 400px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.gmail-triage-scroll-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.gmail-triage-scroll-container::-webkit-scrollbar-track {
+  background: var(--bg-subtle);
+  border-radius: 4px;
+}
+
+.gmail-triage-scroll-container::-webkit-scrollbar-thumb {
+  background: var(--border-cyan);
+  border-radius: 4px;
+}
+
+.gmail-triage-scroll-container::-webkit-scrollbar-thumb:hover {
+  background: var(--c-cyan);
+}
+
+.gmail-feed-card {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-base);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.gmail-feed-card:hover {
+  border-color: var(--c-cyan);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-card);
+}
+
+.gmail-feed-card.high-priority {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, var(--bg-surface) 100%);
+  box-shadow: 0 4px 14px rgba(239, 68, 68, 0.15);
+}

@@ -1,0 +1,180 @@
+.digest-panel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-cyan);
+  border-radius: 14px;
+  box-shadow: var(--shadow-card);
+}
+
+.digest-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-base);
+}
+
+.digest-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.digest-tab-btn:hover {
+  color: var(--text-base);
+  background: var(--bg-subtle-hi);
+}
+
+.digest-tab-btn.active {
+  background: rgba(168, 85, 247, 0.2);
+  color: var(--c-purple);
+  border-color: rgba(168, 85, 247, 0.5);
+  box-shadow: 0 0 10px rgba(168, 85, 247, 0.15);
+}
+
+.digest-section-card {
+  padding: 14px;
+  background: var(--bg-surface-lo);
+  border: 1px solid var(--border-base);
+  border-radius: 10px;
+  font-size: 0.86rem;
+  color: var(--text-base);
+  line-height: 1.65;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.digest-section-card::-webkit-scrollbar {
+  width: 5px;
+}
+.digest-section-card::-webkit-scrollbar-thumb {
+  background: rgba(168, 85, 247, 0.4);
+  border-radius: 4px;
+}
+
+/* High Readability Markdown Component Styles */
+.digest-markdown h1 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-base);
+  margin: 12px 0 8px 0;
+  padding-bottom: 4px;
+  border-bottom: 2px solid rgba(168, 85, 247, 0.4);
+}
+
+.digest-markdown h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--c-purple);
+  margin: 14px 0 8px 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.digest-markdown h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--c-cyan);
+  margin: 10px 0 6px 0;
+}
+
+.digest-markdown p {
+  margin: 6px 0 10px 0;
+  color: var(--text-base);
+  font-size: 0.86rem;
+  line-height: 1.65;
+}
+
+.digest-markdown ul, .digest-markdown ol {
+  list-style: none;
+  padding-left: 0;
+  margin: 8px 0 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.digest-markdown li {
+  background: var(--bg-input);
+  border: 1px solid var(--border-base);
+  border-left: 3px solid var(--c-purple);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 0.84rem;
+  color: var(--text-base);
+  line-height: 1.55;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.digest-markdown li:hover {
+  background: var(--bg-subtle-hi);
+  border-left-color: var(--c-cyan);
+}
+
+.digest-markdown strong {
+  color: var(--text-base);
+  font-weight: 700;
+}
+
+.digest-markdown hr {
+  border: 0;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(168, 85, 247, 0.4) 0%, var(--border-base) 100%);
+  margin: 14px 0;
+}
+
+/* Fullscreen Modal Readability */
+.digest-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(6px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.digest-modal-content {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-mid);
+  border-radius: 16px;
+  max-width: 860px;
+  width: 100%;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.digest-modal-header {
+  padding: 16px 22px;
+  background: var(--bg-surface-lo);
+  border-bottom: 1px solid var(--border-base);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.digest-modal-body {
+  padding: 24px 28px;
+  overflow-y: auto;
+}

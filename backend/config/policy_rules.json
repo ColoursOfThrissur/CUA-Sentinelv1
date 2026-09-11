@@ -1,0 +1,65 @@
+{
+  "policy_version": "1",
+  "risk_levels": {
+    "L0": {
+      "label": "Read Only",
+      "description": "Read files, query databases, search web",
+      "requires_approval": false,
+      "auto_log": false
+    },
+    "L1": {
+      "label": "Local Write",
+      "description": "Write to sandbox workspace, create local files",
+      "requires_approval": false,
+      "auto_log": true
+    },
+    "L2": {
+      "label": "Project Mutation",
+      "description": "Git commit, modify project files, install packages in sandbox",
+      "requires_approval": false,
+      "auto_log": true,
+      "notify_on_complete": true
+    },
+    "L3": {
+      "label": "Destructive or External",
+      "description": "Git push, deploy, delete files outside sandbox, global installs, open external apps",
+      "requires_approval": true,
+      "approval_timeout_sec": 3600,
+      "auto_log": true,
+      "notify_immediately": true
+    }
+  },
+  "tool_policies": {
+    "web_search": { "risk_level": "L0", "network_profile": "HTTP_GET_ALLOWLIST", "timeout_sec": 30, "retryable": true, "recovery_strategy": "IDEMPOTENT_RETRY" },
+    "file_read": { "risk_level": "L0", "timeout_sec": 10, "retryable": true, "recovery_strategy": "IDEMPOTENT_RETRY" },
+    "file_write": { "risk_level": "L1", "timeout_sec": 10, "retryable": true, "recovery_strategy": "IDEMPOTENT_RETRY" },
+    "git_read": { "risk_level": "L0", "timeout_sec": 15, "retryable": true, "recovery_strategy": "IDEMPOTENT_RETRY" },
+    "git_commit": { "risk_level": "L2", "timeout_sec": 30, "retryable": false, "recovery_strategy": "QUERY_STATE" },
+    "git_push": { "risk_level": "L3", "timeout_sec": 60, "retryable": false, "recovery_strategy": "HITL" },
+    "app_launch": { "risk_level": "L3", "timeout_sec": 30, "retryable": false, "recovery_strategy": "HITL" },
+    "memory_read": { "risk_level": "L0", "timeout_sec": 10, "retryable": true, "recovery_strategy": "IDEMPOTENT_RETRY" },
+    "memory_write": { "risk_level": "L1", "timeout_sec": 10, "retryable": true, "recovery_strategy": "IDEMPOTENT_RETRY" }
+  },
+  "retry_policy": {
+    "SYNTAX": { "max_retries": 3, "strategy": "inject_error_and_retry" },
+    "MISSING_DEPENDENCY": { "max_retries": 2, "strategy": "dispatch_installer_then_retry" },
+    "NETWORK": { "max_retries": 3, "strategy": "exponential_backoff", "backoff_base_sec": 2 },
+    "AUTH": { "max_retries": 0, "strategy": "halt_and_escalate" },
+    "PERMISSION": { "max_retries": 0, "strategy": "halt_and_escalate" },
+    "DETERMINISTIC_LOOP": { "max_retries": 0, "strategy": "force_strategy_pivot" },
+    "DESTRUCTIVE_RISK": { "max_retries": 0, "strategy": "hitl_pause" }
+  },
+  "safe_mode_triggers": [
+    "repeated_gpu_driver_failure",
+    "sqlite_corruption_detected",
+    "orchestrator_crash_loop",
+    "excessive_ram_pressure",
+    "repeated_security_violations"
+  ],
+  "safe_mode_allowed_operations": [
+    "ENDPOINT",
+    "file_read",
+    "memory_read",
+    "diagnostics"
+  ]
+}

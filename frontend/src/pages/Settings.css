@@ -1,0 +1,36 @@
+.settings-page {
+  min-height: 100vh;
+  padding: 16px;
+  background: var(--bg-page);
+  color: var(--text-base);
+}
+@media (min-width: 640px) { .settings-page { padding: 24px; } }
+
+.settings-container { max-width: 980px; margin: 0 auto; }
+
+.settings-heading { margin-bottom: 20px; }
+.settings-heading h1 { margin-top: 6px; font-size: 1.5rem; font-weight: 600; color: #fff; }
+
+.settings-section {
+  margin-bottom: 20px;
+  padding: 20px;
+}
+.settings-section-header {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 14px;
+}
+.settings-section-header h2 { font-size: 0.95rem; font-weight: 600; color: rgba(255,255,255,0.85); }
+
+.settings-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+
+.models-list { display: flex; flex-direction: column; border-top: 1px solid rgba(255,255,255,0.05); }
+.model-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 14px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.model-row:last-child { border-bottom: none; }
+.model-name { font-size: 0.95rem; font-weight: 600; color: #fff; }
+.model-meta { margin-top: 4px; font-size: 0.8rem; color: var(--text-dim); }
+.model-toggle-on  { border-color: rgba(103,232,249,0.3) !important; color: var(--c-cyan-soft) !important; min-width: 112px; }
+.model-toggle-off { min-width: 112px; }

@@ -1,0 +1,38 @@
+.token-gate {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 100vh; padding: 24px;
+  background: var(--bg-page);
+}
+.token-gate-card {
+  width: 100%; max-width: 360px;
+  padding: 36px 28px;
+  display: flex; flex-direction: column; align-items: center; gap: 24px;
+}
+.token-gate-logo {
+  display: flex; align-items: center; justify-content: center;
+  width: 56px; height: 56px; border-radius: var(--r-lg);
+  background: linear-gradient(135deg, #0891b2, var(--c-indigo));
+  border: 1px solid rgba(103,232,249,0.3);
+  box-shadow: var(--shadow-cyan);
+}
+.token-gate-title { font-size: 1.1rem; font-weight: 600; color: #fff; text-align: center; }
+.token-gate-sub   { margin-top: 4px; font-size: 0.85rem; color: var(--text-dim); text-align: center; }
+.token-gate-form  { width: 100%; display: flex; flex-direction: column; gap: 12px; }
+.token-input-wrap { position: relative; }
+.token-input-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-faint); pointer-events: none; }
+.token-input      { padding-left: 36px !important; }
+.token-error      { font-size: 0.8rem; color: var(--c-red); text-align: center; }
+.token-submit     { width: 100%; }
+
+.app-loading {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 100vh; background: var(--bg-page);
+  gap: 6px;
+}
+.loading-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: rgba(148,163,184,0.3);
+  animation: blink 1.2s ease-in-out infinite;
+}
+.loading-dot:nth-child(2) { animation-delay: 0.15s; }
+.loading-dot:nth-child(3) { animation-delay: 0.30s; }

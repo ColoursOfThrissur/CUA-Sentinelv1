@@ -1,0 +1,10 @@
+.telemetry-bar { display: flex; align-items: center; gap: 8px; }
+
+.telemetry-chip { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: var(--r-pill); background: var(--bg-subtle); border: 1px solid var(--bg-subtle-hi); }
+.telemetry-chip.warm { background: rgba(250,204,21,0.08);  border-color: rgba(250,204,21,0.15); }
+.telemetry-chip.hot  { background: rgba(248,113,113,0.08); border-color: rgba(248,113,113,0.2); }
+
+.telemetry-label { font-size: 0.72rem; color: var(--text-dim); }
+.telemetry-value { font-size: 0.75rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.telemetry-value.warm { color: var(--c-yellow); }
+.telemetry-value.hot  { color: var(--c-red); }

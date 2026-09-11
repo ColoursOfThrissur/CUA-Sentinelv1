@@ -1,0 +1,19 @@
+.system-status { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+
+.system-header { display: flex; align-items: center; justify-content: space-between; }
+.system-settings-link { display: flex; align-items: center; gap: 4px; font-size: 0.78rem; color: var(--text-faint); transition: color 0.15s; }
+.system-settings-link:hover { color: var(--text-muted); }
+
+.status-rows { display: flex; flex-direction: column; gap: 8px; }
+.status-row  { display: flex; align-items: center; justify-content: space-between; }
+.status-row-label { font-size: 0.8rem; color: var(--text-dim); }
+
+.hw-bars { display: flex; flex-direction: column; gap: 12px; }
+.hw-bar  { display: flex; flex-direction: column; gap: 4px; }
+.hw-bar-header { display: flex; align-items: center; justify-content: space-between; }
+.hw-bar-label  { font-size: 0.78rem; color: var(--text-faint); }
+.hw-bar-value  { font-size: 0.78rem; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text-muted); }
+
+.hw-skeleton-row { display: flex; align-items: center; gap: 8px; }
+.hw-skeleton-label { font-size: 0.78rem; color: var(--text-faint); width: 36px; flex-shrink: 0; }
+.hw-skeleton-bar  { flex: 1; height: 8px; }
