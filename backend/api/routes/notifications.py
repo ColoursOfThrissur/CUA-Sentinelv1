@@ -133,3 +133,48 @@ def test_email_dispatch() -> Dict[str, Any]:
         return {"status": "SUCCESS", "sent": sent}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"SMTP email dispatch failed: {str(e)}")
+
+
+class PushKeys(BaseModel):
+    p256dh: str
+    auth: str
+
+
+class PushSubscriptionPayload(BaseModel):
+    endpoint: str
+    keys: PushKeys
+    user_agent: Optional[str] = None
+
+
+@router.get("/vapid-public-key")
+def get_vapid_public_key() -> Dict[str, str]:
+    """Exposes VAPID public key for browser push subscription handshakes."""
+    from core.webpush_engine import webpush_engine
+    return {"public_key": webpush_engine.get_public_key()}
+
+
+@router.post("/push-subscribe")
+def subscribe_push(payload: PushSubscriptionPayload) -> Dict[str, Any]:
+    """Registers a browser Web Push subscription."""
+    from core.webpush_engine import webpush_engine
+    success = webpush_engine.save_subscription(
+        endpoint=payload.endpoint,
+        p256dh=payload.keys.p256dh,
+        auth=payload.keys.auth,
+        user_agent=payload.user_agent,
+    )
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save push subscription.")
+    return {"status": "SUBSCRIBED", "endpoint": payload.endpoint[:35] + "..."}
+
+
+@router.post("/push-test")
+def send_test_push() -> Dict[str, Any]:
+    """Dispatches an instant test push notification to all subscribed browsers."""
+    from core.webpush_engine import webpush_engine
+    res = webpush_engine.dispatch_push(
+        title="🛡️ CUA-Sentinel Alert",
+        body="Browser Web Push notification successfully connected and verified!",
+        url="/",
+    )
+    return {"status": "SUCCESS", "dispatch_result": res}

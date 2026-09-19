@@ -108,6 +108,14 @@ class AlertManager:
             except Exception as email_err:
                 logger.warning(f"Failed sending alert email: {email_err}")
 
+        # 4. Browser Web Push Dispatch
+        try:
+            from core.webpush_engine import webpush_engine
+            push_res = webpush_engine.dispatch_push(title=f"🛡️ {title}", body=message, url=link or "/")
+            results["web_push"] = push_res.get("dispatched", 0) > 0
+        except Exception as push_err:
+            logger.debug(f"Failed dispatching web push: {push_err}")
+
         return results
 
     async def _send_discord(

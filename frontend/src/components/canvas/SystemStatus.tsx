@@ -2,12 +2,15 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useSentinelStore } from '../../store'
 import { settingsApi } from '../../api'
+import { Activity } from 'lucide-react'
+import { TelemetryHistoryModal } from '../telemetry/TelemetryHistoryModal'
 import './SystemStatus.css'
 
 export default function SystemStatus() {
   const { systemState, wsConnected, telemetry } = useSentinelStore()
   const navigate = useNavigate()
   const [autoHeal, setAutoHeal] = useState(true)
+  const [showHistory, setShowHistory] = useState(false)
 
   useEffect(() => {
     settingsApi.getPreferences().then(r => {
@@ -98,6 +101,17 @@ export default function SystemStatus() {
           ))}
         </div>
       )}
+
+      <button
+        onClick={() => setShowHistory(true)}
+        className="btn btn-ghost"
+        style={{ width: '100%', marginTop: 8, fontSize: '0.72rem', gap: 6, justifyContent: 'center', padding: '5px 8px' }}
+        title="View 24-hour hardware trends and metrics"
+      >
+        <Activity size={12} color="#38bdf8" /> 24h Hardware Trends
+      </button>
+
+      {showHistory && <TelemetryHistoryModal onClose={() => setShowHistory(false)} />}
     </div>
   )
 }
