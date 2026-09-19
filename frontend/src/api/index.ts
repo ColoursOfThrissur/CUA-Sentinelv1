@@ -25,6 +25,7 @@ export const chatApi = {
 
 export const modelsApi = {
   list: () => api.get('/models/'),
+  getActive: () => api.get('/models/active'),
   enable: (id: string) => api.post(`/models/${id}/enable`),
   disable: (id: string) => api.post(`/models/${id}/disable`),
 }
@@ -96,6 +97,10 @@ export const gmailTriageApi = {
 
 export const codeRefactorApi = {
   scan: (projectPath: string) => api.post('/code-refactor/scan', { project_path: projectPath }),
+  solutionContext: (projectPath: string) => api.post('/code-refactor/solution-context', { project_path: projectPath }),
+  dualDiagnostics: (projectPath: string) => api.post('/code-refactor/dual-diagnostics', { project_path: projectPath }),
+  autoHealTrigger: (projectPath: string, errorContext: string, source?: string) =>
+    api.post('/code-refactor/auto-heal-trigger', { project_path: projectPath, error_context: errorContext, source }),
   start: (projectPath: string, goalInstruction?: string, approvedFeatures?: string[], blueprintContent?: string, blueprintFilename?: string) =>
     api.post('/code-refactor/start', { project_path: projectPath, goal_instruction: goalInstruction, approved_features: approvedFeatures, blueprint_content: blueprintContent, blueprint_filename: blueprintFilename }),
   createScratch: (data: { project_name: string; target_path: string; tech_stack: string; ui_style?: string; features?: string[]; description?: string; blueprint_content?: string; blueprint_filename?: string }) =>
@@ -103,22 +108,60 @@ export const codeRefactorApi = {
   launchPreview: (projectPath: string) => api.post('/code-refactor/launch-preview', { project_path: projectPath }),
   rollback: (projectPath: string, taskId: string) => api.post('/code-refactor/rollback', { project_path: projectPath, task_id: taskId }),
   installDeps: (projectPath: string) => api.post('/code-refactor/install-dependencies', { project_path: projectPath }),
+  diagnoseFile: (projectPath: string, filePath: string) => api.post('/code-refactor/diagnose-file', { project_path: projectPath, file_path: filePath }),
+  validateAlignment: (projectPath: string, goalInstruction?: string, autoRemediate?: boolean) =>
+    api.post('/code-refactor/validate-alignment', { project_path: projectPath, goal_instruction: goalInstruction, auto_remediate: autoRemediate }),
+  remediateAlignment: (projectPath: string, goalInstruction?: string) =>
+    api.post('/code-refactor/auto-remediate-alignment', { project_path: projectPath, goal_instruction: goalInstruction }),
 }
 
 export const projectsApi = {
   list: () => api.get('/projects/list'),
   register: (data: { project_name: string; target_path: string; tech_stack: string; ui_style?: string; blueprint_filename?: string }) =>
     api.post('/projects/register', data),
-  get: (projectId: string) => api.get(`/projects/${projectId}`),
-  startServer: (projectId: string) => api.post(`/projects/${projectId}/start-server`),
-  stopServer: (projectId: string) => api.post(`/projects/${projectId}/stop-server`),
-  getLogs: (projectId: string, tail = 100) => api.get(`/projects/${projectId}/logs`, { params: { tail } }),
-  exportZip: (projectId: string, exportDir?: string) => api.post(`/projects/${projectId}/export-zip`, { export_dir: exportDir }),
-  fulfillSpec: (projectId: string) => api.post(`/projects/${projectId}/fulfill-spec`),
-  deleteProject: (projectId: string, purgeFiles = false) => api.delete(`/projects/${projectId}`, { params: { purge_files: purgeFiles } }),
-  getTree: (projectId: string) => api.get(`/projects/${projectId}/tree`),
-  readFile: (projectId: string, relativePath: string) => api.get(`/projects/${projectId}/file`, { params: { relative_path: relativePath } }),
-  writeFile: (projectId: string, relativePath: string, content: string) => api.post(`/projects/${projectId}/file`, { relative_path: relativePath, content }),
-  sendPrompt: (projectId: string, prompt: string, targetFile?: string) => api.post(`/projects/${projectId}/prompt`, { prompt, target_file: targetFile }),
+  get: (projectId: string) => {
+    if (!projectId || !projectId.trim()) return Promise.reject(new Error('Invalid project ID'))
+    return api.get(`/projects/${projectId}`)
+  },
+  startServer: (projectId: string) => {
+    if (!projectId || !projectId.trim()) return Promise.reject(new Error('Invalid project ID'))
+    return api.post(`/projects/${projectId}/start-server`)
+  },
+  stopServer: (projectId: string) => {
+    if (!projectId || !projectId.trim()) return Promise.reject(new Error('Invalid project ID'))
+    return api.post(`/projects/${projectId}/stop-server`)
+  },
+  getLogs: (projectId: string, tail = 100) => {
+    if (!projectId || !projectId.trim()) return Promise.resolve({ data: { logs: [] } })
+    return api.get(`/projects/${projectId}/logs`, { params: { tail } })
+  },
+  exportZip: (projectId: string, exportDir?: string) => {
+    if (!projectId || !projectId.trim()) return Promise.reject(new Error('Invalid project ID'))
+    return api.post(`/projects/${projectId}/export-zip`, { export_dir: exportDir })
+  },
+  fulfillSpec: (projectId: string) => {
+    if (!projectId || !projectId.trim()) return Promise.reject(new Error('Invalid project ID'))
+    return api.post(`/projects/${projectId}/fulfill-spec`)
+  },
+  deleteProject: (projectId: string, purgeFiles = false) => {
+    if (!projectId || !projectId.trim()) return Promise.reject(new Error('Invalid project ID'))
+    return api.delete(`/projects/${projectId}`, { params: { purge_files: purgeFiles } })
+  },
+  getTree: (projectId: string) => {
+    if (!projectId || !projectId.trim()) return Promise.resolve({ data: { tree: [] } })
+    return api.get(`/projects/${projectId}/tree`)
+  },
+  readFile: (projectId: string, relativePath: string) => {
+    if (!projectId || !projectId.trim()) return Promise.reject(new Error('Invalid project ID'))
+    return api.get(`/projects/${projectId}/file`, { params: { relative_path: relativePath } })
+  },
+  writeFile: (projectId: string, relativePath: string, content: string) => {
+    if (!projectId || !projectId.trim()) return Promise.reject(new Error('Invalid project ID'))
+    return api.post(`/projects/${projectId}/file`, { relative_path: relativePath, content })
+  },
+  sendPrompt: (projectId: string, prompt: string, targetFile?: string) => {
+    if (!projectId || !projectId.trim()) return Promise.reject(new Error('Invalid project ID'))
+    return api.post(`/projects/${projectId}/prompt`, { prompt, target_file: targetFile })
+  },
 }
 

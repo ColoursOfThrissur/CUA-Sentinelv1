@@ -9,18 +9,85 @@ Calculates pre- and post-refactor Code Health Index (0-100) based on:
 """
 
 import ast
+import re
 import logging
 from typing import Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
 class CodeHealthEvaluator:
+    def evaluate_js_ts_snippet(self, code_content: str, filename: str = "code.ts") -> dict:
+        """Evaluates JS/TS code quality using regex-based heuristics."""
+        issues = []
+        score = 100
+
+        # Count console.log (debug leftovers)
+        console_logs = len(re.findall(r'console\.log\s*\(', code_content))
+        if console_logs > 0:
+            penalty = min(console_logs * 2, 10)
+            score -= penalty
+            issues.append(f"{console_logs} console.log() call(s) detected — remove debug logging from production code.")
+
+        # TypeScript 'any' type abuse
+        any_types = len(re.findall(r':\s*any\b', code_content))
+        if any_types > 0:
+            penalty = min(any_types * 3, 15)
+            score -= penalty
+            issues.append(f"{any_types} use(s) of TypeScript 'any' type detected — weakens type safety.")
+
+        # TODO/FIXME/HACK comments
+        todo_count = len(re.findall(r'//\s*(TODO|FIXME|HACK):', code_content, re.IGNORECASE))
+        if todo_count > 0:
+            score -= min(todo_count * 3, 12)
+            issues.append(f"{todo_count} TODO/FIXME/HACK comment(s) indicate incomplete implementation.")
+
+        # debugger statements
+        debugger_count = len(re.findall(r'\bdebugger\b', code_content))
+        if debugger_count > 0:
+            score -= 10
+            issues.append(f"{debugger_count} 'debugger' statement(s) left in code — must be removed.")
+
+        # Loose equality (== null instead of === null)
+        loose_eq = len(re.findall(r'[^=!]==[^=]', code_content))
+        if loose_eq > 2:
+            score -= min(loose_eq * 2, 8)
+            issues.append(f"{loose_eq} loose equality check(s) (==) found — use === for strict comparison.")
+
+        # Count functions (arrow + regular)
+        total_functions = len(re.findall(r'(?:function\s+\w+|(?:const|let|var)\s+\w+\s*=\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>)', code_content))
+
+        # Async without try/catch
+        async_blocks = re.findall(r'async\s+(?:function\s+\w+|\([^)]*\)\s*=>|\w+\s*=>)', code_content)
+        try_catch_count = len(re.findall(r'try\s*\{', code_content))
+        if len(async_blocks) > try_catch_count:
+            score -= min((len(async_blocks) - try_catch_count) * 5, 15)
+            issues.append(f"{len(async_blocks) - try_catch_count} async function(s) without corresponding try/catch error handling.")
+
+        return {
+            "health_score": max(10, min(100, score)),
+            "total_functions": total_functions,
+            "typed_functions": 0,
+            "docstring_functions": 0,
+            "issues": issues[:10]
+        }
+
     def evaluate_code_snippet(self, code_content: str, filename: str = "code.py") -> Dict[str, Any]:
         """
         Evaluates a single code snippet and returns a health breakdown.
         """
+        # Skip non-code files (json, md, txt, yaml, html, css, etc.)
+        valid_code_exts = ('.py', '.js', '.jsx', '.ts', '.tsx')
+        if not filename.lower().endswith(valid_code_exts):
+            return {"health_score": 100, "total_functions": 0, "typed_functions": 0, "docstring_functions": 0, "issues": []}
+
+        # Route JS/TS files to dedicated evaluator
+        js_ts_exts = ('.js', '.jsx', '.ts', '.tsx')
+        if filename.lower().endswith(js_ts_exts):
+            return self.evaluate_js_ts_snippet(code_content, filename)
+
         if not code_content or not code_content.strip():
             return {"health_score": 100, "issues": [], "ast_complexity": 0}
+
 
         issues = []
         score = 100
@@ -116,3 +183,4 @@ class CodeHealthEvaluator:
         }
 
 code_health_evaluator = CodeHealthEvaluator()
+scanner = code_health_evaluator

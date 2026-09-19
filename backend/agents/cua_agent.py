@@ -37,8 +37,8 @@ class CUAAgent(BaseAgent):
 
             # Step 1b: Auto-cleanup old screenshots in SQLite to avoid database bloat
             try:
-                from db.connections import get_op_db
-                with get_op_db() as db_conn:
+                from db.connections import get_operational_db
+                with get_operational_db() as db_conn:
                     self.desktop_tool.cleanup_old_screenshots(db_conn, keep_count=20)
             except Exception as clean_err:
                 logger.debug(f"Screenshot cleanup check: {clean_err}")

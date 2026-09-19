@@ -49,10 +49,24 @@ class IntentRouter:
     @classmethod
     def classify_intent(cls, prompt: str, explicit_workflow: Optional[str] = None) -> str:
         """
-        Classifies incoming prompt into targeted capability intent.
+        Classifies incoming prompt using hybrid intent analysis:
+        1. Fast semantic IntentClassifier evaluation.
+        2. Deterministic keyword matching fallback.
         """
         if explicit_workflow and explicit_workflow.upper() in AgentRegistry._registry:
             return explicit_workflow.upper()
+
+        try:
+            from core.intent_classifier import intent_classifier
+            res = intent_classifier.classify(prompt, explicit_workflow)
+            if res.get("confidence", 0) >= 0.75:
+                intent = res.get("intent", "ENDPOINT")
+                if intent == "AUTONOMOUS_DIGEST":
+                    return "ENDPOINT"
+                if intent in AgentRegistry._registry:
+                    return intent
+        except Exception as e:
+            logger.debug(f"IntentClassifier fallback: {e}")
 
         text = prompt.lower()
 

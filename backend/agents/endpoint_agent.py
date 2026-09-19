@@ -1,5 +1,6 @@
 import logging
 import re
+from datetime import datetime
 from agents.base_agent import BaseAgent
 from tools.web_search import WebSearchTool
 from tools.finance_tools import FinanceTools
@@ -69,10 +70,17 @@ class EndpointAgent(BaseAgent):
         payload = claim.input_payload
 
         prompt = payload.get("prompt", "")
-        system_prompt = payload.get("system_prompt") or (
+        now_str = datetime.now().strftime("%A, %B %d, %Y (%I:%M %p)")
+        base_prompt = payload.get("system_prompt") or (
             "You are CUA-Sentinel, an intelligent personal AI assistant running locally on the user's PC. "
             "Provide direct, accurate, and helpful answers to user requests. When context data is provided, use it directly without issuing unnecessary disclaimers or mentioning unrelated tools."
         )
+
+        from core.memory_layers import memory_layers
+        recent_activity = memory_layers.get_recent_autonomous_activity_summary(hours=24)
+        activity_context = f"\n\n{recent_activity}" if recent_activity else ""
+
+        system_prompt = f"{base_prompt}\nToday's Date & Time: {now_str}{activity_context}"
         use_web = bool(payload.get("use_web"))
 
         if not prompt:

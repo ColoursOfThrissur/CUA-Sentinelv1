@@ -8,6 +8,41 @@
 .status-row  { display: flex; align-items: center; justify-content: space-between; }
 .status-row-label { font-size: 0.8rem; color: var(--text-dim); }
 
+.switch-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 4px;
+  border-radius: 99px;
+  background: var(--bg-subtle-hi, rgba(255,255,255,0.06));
+  border: 1px solid var(--border-mid, rgba(148,163,184,0.16));
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.switch-toggle.active {
+  background: rgba(245, 158, 11, 0.18);
+  border-color: rgba(245, 158, 11, 0.35);
+}
+.switch-knob {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #94a3b8;
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+.switch-toggle.active .switch-knob {
+  transform: translateX(2px);
+  background: #f59e0b;
+}
+.switch-text {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+.switch-toggle.active .switch-text {
+  color: #f59e0b;
+}
+
 .hw-bars { display: flex; flex-direction: column; gap: 12px; }
 .hw-bar  { display: flex; flex-direction: column; gap: 4px; }
 .hw-bar-header { display: flex; align-items: center; justify-content: space-between; }

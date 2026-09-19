@@ -6,6 +6,7 @@ real-time stdout/stderr log streaming, zip archiving, and safe disk deletion.
 """
 
 import os
+import re
 import shutil
 import uuid
 import zipfile
@@ -15,6 +16,70 @@ import collections
 import logging
 from typing import Dict, Any, List, Optional
 from pathlib import Path
+import time
+
+ANSI_ESCAPE_REGEX = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
+def clean_terminal_log_line(line: str) -> str:
+    """Strips ANSI escape codes and fixes UTF-8/CP1252 character encoding glitches."""
+    if not line:
+        return ""
+    clean = ANSI_ESCAPE_REGEX.sub("", line)
+    clean = clean.replace("âžœ", "➜").replace("âœ", "✓").replace("â€", "—")
+    return clean.rstrip()
+
+
+def kill_process_tree(pid: int) -> None:
+    """Forcefully kills a process and all its child processes across Windows & Linux/macOS."""
+    if not pid or pid <= 0:
+        return
+    try:
+        if os.name == 'nt':
+            subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, capture_output=True, timeout=5)
+        else:
+            import signal
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except Exception as e:
+        logger.debug(f"Failed to kill process tree for PID {pid}: {e}")
+
+
+def kill_process_on_port(port: int) -> None:
+    """Scans netstat for any process listening on target port and forces termination on Windows."""
+    if not port or port <= 0:
+        return
+    try:
+        if os.name == 'nt':
+            cmd = f'netstat -aon | findstr LISTENING | findstr :{port}'
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            if res.stdout:
+                for line in res.stdout.strip().splitlines():
+                    parts = line.split()
+                    if parts and len(parts) >= 5:
+                        local_addr = parts[1]
+                        pid_str = parts[-1]
+                        if local_addr.endswith(f":{port}") and pid_str.isdigit():
+                            pid = int(pid_str)
+                            if pid > 0 and pid != os.getpid():
+                                logger.info(f"Port Netstat Scavenger: Killing PID {pid} occupying port {port}")
+                                kill_process_tree(pid)
+    except Exception as e:
+        logger.debug(f"kill_process_on_port error for port {port}: {e}")
+
+
+def _ensure_columns(conn) -> None:
+    """Ensures backend_port and frontend_port columns exist in created_projects table."""
+    try:
+        cursor = conn.execute("PRAGMA table_info(created_projects)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "backend_port" not in columns:
+            conn.execute("ALTER TABLE created_projects ADD COLUMN backend_port INTEGER")
+        if "frontend_port" not in columns:
+            conn.execute("ALTER TABLE created_projects ADD COLUMN frontend_port INTEGER")
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"Error ensuring DB columns in created_projects: {e}")
+
+
 
 try:
     from db.connections import get_operational_db
@@ -32,9 +97,31 @@ MAX_LOG_LINES = 500
 
 class ProjectsManager:
     def __init__(self):
-        self._active_processes: Dict[str, subprocess.Popen] = {}
+        self._active_processes: Dict[str, List[subprocess.Popen]] = collections.defaultdict(list)
         self._project_logs: Dict[str, collections.deque] = collections.defaultdict(lambda: collections.deque(maxlen=MAX_LOG_LINES))
         self._log_threads: Dict[str, List[threading.Thread]] = collections.defaultdict(list)
+
+    def _allocate_assigned_ports(self, conn) -> tuple:
+        """Allocates next available collision-free backend_port (8001+) and frontend_port (5174+)."""
+        try:
+            cursor = conn.execute("SELECT MAX(backend_port), MAX(frontend_port) FROM created_projects")
+            row = cursor.fetchone()
+            max_backend = row[0] if row and row[0] else 8000
+            max_frontend = row[1] if row and row[1] else 5173
+
+            backend_port = max(max_backend + 1, 8001)
+            frontend_port = max(max_frontend + 1, 5174)
+
+            backend_port = sandbox_runner.find_open_port(backend_port)
+            frontend_port = sandbox_runner.find_open_port(frontend_port)
+
+            if frontend_port == backend_port:
+                frontend_port = sandbox_runner.find_open_port(backend_port + 1)
+
+            return backend_port, frontend_port
+        except Exception as e:
+            logger.warning(f"Failed to allocate dynamic ports: {e}")
+            return 8001, 5174
 
     def register_project(
         self,
@@ -44,16 +131,43 @@ class ProjectsManager:
         ui_style: str = "Glassmorphism",
         blueprint_filename: Optional[str] = None,
         health_score: int = 100,
-        security_score: int = 100
+        security_score: int = 100,
+        backend_port: Optional[int] = None,
+        frontend_port: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Registers a created/scaffolded/refactored solution in the persistent database.
+        Registers a created/scaffolded/refactored solution in the persistent database with assigned ports.
         """
         norm_path = os.path.abspath(target_path)
+
+        # ── Sentinel Self-Protection Guard ────────────────────────────────────────
+        _sentinel_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        if os.path.normcase(norm_path) == os.path.normcase(_sentinel_root):
+            logger.warning(
+                "Sentinel Self-Protection: Blocked attempt to register the CUA-Sentinel "
+                "installation directory as a managed project. Registration skipped."
+            )
+            return {
+                "project_id": "sentinel_self",
+                "project_name": project_name,
+                "target_path": norm_path,
+                "tech_stack": tech_stack,
+                "status": "PROTECTED",
+                "_sentinel_protected": True,
+            }
+        # ─────────────────────────────────────────────────────────────────────────
+
         project_id = f"proj_{uuid.uuid4().hex[:10]}"
 
         conn = get_operational_db()
         try:
+            _ensure_columns(conn)
+
+            if not backend_port or not frontend_port:
+                alloc_b, alloc_f = self._allocate_assigned_ports(conn)
+                backend_port = backend_port or alloc_b
+                frontend_port = frontend_port or alloc_f
+
             # Check if path already registered
             cursor = conn.execute("SELECT * FROM created_projects WHERE target_path = ?", (norm_path,))
             existing = cursor.fetchone()
@@ -62,10 +176,10 @@ class ProjectsManager:
                     """
                     UPDATE created_projects
                     SET project_name = ?, tech_stack = ?, ui_style = ?, blueprint_filename = ?,
-                        health_score = ?, security_score = ?
+                        health_score = ?, security_score = ?, backend_port = ?, frontend_port = ?
                     WHERE target_path = ?
                     """,
-                    (project_name, tech_stack, ui_style, blueprint_filename, health_score, security_score, norm_path)
+                    (project_name, tech_stack, ui_style, blueprint_filename, health_score, security_score, backend_port, frontend_port, norm_path)
                 )
                 conn.commit()
                 return self.get_project_by_path(norm_path)
@@ -74,13 +188,14 @@ class ProjectsManager:
                 """
                 INSERT INTO created_projects (
                     project_id, project_name, target_path, tech_stack, ui_style,
-                    blueprint_filename, health_score, security_score, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'STOPPED')
+                    blueprint_filename, health_score, security_score, status,
+                    backend_port, frontend_port
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'STOPPED', ?, ?)
                 """,
-                (project_id, project_name, norm_path, tech_stack, ui_style, blueprint_filename, health_score, security_score)
+                (project_id, project_name, norm_path, tech_stack, ui_style, blueprint_filename, health_score, security_score, backend_port, frontend_port)
             )
             conn.commit()
-            logger.info(f"Registered project '{project_name}' ({project_id}) at path: {norm_path}")
+            logger.info(f"Registered project '{project_name}' ({project_id}) at path: {norm_path} (Backend: {backend_port}, Frontend: {frontend_port})")
             return self.get_project(project_id)
         finally:
             conn.close()
@@ -88,6 +203,7 @@ class ProjectsManager:
     def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
         conn = get_operational_db()
         try:
+            _ensure_columns(conn)
             cursor = conn.execute("SELECT * FROM created_projects WHERE project_id = ?", (project_id,))
             row = cursor.fetchone()
             if not row:
@@ -100,6 +216,7 @@ class ProjectsManager:
         norm_path = os.path.abspath(target_path)
         conn = get_operational_db()
         try:
+            _ensure_columns(conn)
             cursor = conn.execute("SELECT * FROM created_projects WHERE target_path = ?", (norm_path,))
             row = cursor.fetchone()
             if not row:
@@ -111,9 +228,40 @@ class ProjectsManager:
     def list_projects(self) -> List[Dict[str, Any]]:
         """
         Lists all registered projects enriched with live status, disk size, and file counts.
+        Automatically performs a disk sweep on project roots (e.g. G:\\Projects, D:\\Projects) to discover unregistered projects.
         """
+        # Disk auto-discovery sweep
+        search_roots = ["G:\\Projects", "D:\\Projects", "C:\\Projects"]
+        for root_dir in search_roots:
+            if os.path.exists(root_dir):
+                try:
+                    for entry in os.listdir(root_dir):
+                        full_entry = os.path.join(root_dir, entry)
+                        if os.path.isdir(full_entry) and not entry.startswith(('.', '$')):
+                            has_pkg = os.path.exists(os.path.join(full_entry, "package.json"))
+                            has_main = os.path.exists(os.path.join(full_entry, "backend", "main.py"))
+                            has_html = os.path.exists(os.path.join(full_entry, "index.html"))
+                            if has_pkg or has_main or has_html:
+                                conn_disc = get_operational_db()
+                                try:
+                                    _ensure_columns(conn_disc)
+                                    norm_p = os.path.abspath(full_entry)
+                                    cur = conn_disc.execute("SELECT 1 FROM created_projects WHERE target_path = ?", (norm_p,))
+                                    if not cur.fetchone():
+                                        self.register_project(
+                                            project_name=entry,
+                                            target_path=norm_p,
+                                            tech_stack="FastAPI + React",
+                                        )
+                                        logger.info(f"ProjectsManager: Auto-discovered and registered project on disk: {norm_p}")
+                                finally:
+                                    conn_disc.close()
+                except Exception as disc_err:
+                    logger.debug(f"Disk discovery error on {root_dir}: {disc_err}")
+
         conn = get_operational_db()
         try:
+            _ensure_columns(conn)
             cursor = conn.execute("SELECT * FROM created_projects ORDER BY created_at DESC")
             rows = cursor.fetchall()
             projects = []
@@ -153,10 +301,11 @@ class ProjectsManager:
             p_dict["disk_size_mb"] = round(total_bytes / (1024 * 1024), 2)
 
         try:
-            proc = self._active_processes.get(p_id)
-            if proc and proc.poll() is None:
+            procs = self._active_processes.get(p_id, [])
+            running_procs = [p for p in procs if p.poll() is None]
+            if running_procs:
                 p_dict["status"] = "RUNNING"
-                p_dict["active_pid"] = proc.pid
+                p_dict["active_pid"] = running_procs[0].pid
             else:
                 if p_id in self._active_processes:
                     del self._active_processes[p_id]
@@ -183,7 +332,7 @@ class ProjectsManager:
 
     def start_project_server(self, project_id: str) -> Dict[str, Any]:
         """
-        Starts background dev server for the given project, returning host URL and port.
+        Starts background dev servers (backend & frontend) for the project with terminal log streaming.
         """
         project = self.get_project(project_id)
         if not project:
@@ -193,22 +342,27 @@ class ProjectsManager:
         if not os.path.exists(target_path):
             return {"success": False, "error": f"Project directory does not exist: {target_path}"}
 
-        # If process already running, return running info
-        proc = self._active_processes.get(project_id)
-        if proc and proc.poll() is None:
-            port = project.get("active_port") or 8001
+        # Check if already running
+        existing_procs = [p for p in self._active_processes.get(project_id, []) if p.poll() is None]
+        if existing_procs:
+            active_port = project.get("active_port") or project.get("frontend_port") or project.get("backend_port") or 8001
             return {
                 "success": True,
                 "project_id": project_id,
                 "status": "RUNNING",
-                "port": port,
-                "pid": proc.pid,
-                "preview_url": f"http://localhost:{port}",
+                "port": active_port,
+                "pid": existing_procs[0].pid,
+                "preview_url": f"http://localhost:{active_port}",
                 "message": "Server is already running."
             }
 
-        allocated_port = sandbox_runner.find_open_port(8001)
-        preview_url = f"http://localhost:{allocated_port}"
+        # Get or allocate ports
+        backend_port = project.get("backend_port") or 8001
+        frontend_port = project.get("frontend_port") or 5174
+
+        # Netstat Scavenger: Ensure ports are completely freed before launching!
+        kill_process_on_port(backend_port)
+        kill_process_on_port(frontend_port)
 
         # Pre-flight environment check & dependency auto-install
         try:
@@ -218,104 +372,209 @@ class ProjectsManager:
         except Exception as env_err:
             logger.warning(f"Pre-flight environment check warning for {project_id}: {env_err}")
 
-        # Determine start command
+        # Setup persistent server log file
+        log_file_path = os.path.join(target_path, "sentinel_server.log")
+        try:
+            with open(log_file_path, "a", encoding="utf-8") as f:
+                f.write(f"\n--- SERVER LAUNCH AT {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+        except Exception:
+            pass
+
         package_json = os.path.join(target_path, "package.json")
-        index_html = os.path.join(target_path, "index.html")
+        node_modules = os.path.join(target_path, "node_modules")
         backend_main = os.path.join(target_path, "backend", "main.py")
         root_main = os.path.join(target_path, "main.py")
-        node_modules = os.path.join(target_path, "node_modules")
+        py_exec = environment_engine.get_python_venv_executables(target_path)["python"]
 
-        if os.path.exists(package_json) and os.path.exists(node_modules):
-            cmd = f"npx vite --port {allocated_port} --host"
-        elif os.path.exists(index_html):
-            cmd = f"python -m http.server {allocated_port}"
-        elif os.path.exists(backend_main):
-            cmd = f'python -c "import sys, uvicorn; sys.path.insert(0, \'.\'); from backend.main import app; uvicorn.run(app, host=\'0.0.0.0\', port={allocated_port})"'
+        spawned_procs: List[subprocess.Popen] = []
+        commands_run: List[str] = []
+        primary_port = frontend_port if os.path.exists(package_json) else backend_port
+
+        creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
+
+        # 1. Spawn FastAPI Backend if backend/main.py or main.py exists
+        if os.path.exists(backend_main):
+            b_cmd = f'"{py_exec}" "{backend_main}"'
         elif os.path.exists(root_main):
-            cmd = f'python -c "import sys, uvicorn; sys.path.insert(0, \'.\'); from main import app; uvicorn.run(app, host=\'0.0.0.0\', port={allocated_port})"'
+            b_cmd = f'"{py_exec}" "{root_main}"'
         else:
-            cmd = f"python -m http.server {allocated_port}"
+            b_cmd = None
 
-        logger.info(f"Launching app server for {project_id} on port {allocated_port}: {cmd}")
+        if b_cmd:
+            logger.info(f"Launching FastAPI Backend for {project_id} on port {backend_port}: {b_cmd}")
+            try:
+                b_proc = subprocess.Popen(
+                    b_cmd,
+                    shell=True,
+                    cwd=target_path,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,
+                    creationflags=creation_flags
+                )
+                spawned_procs.append(b_proc)
+                commands_run.append(b_cmd)
+                self._start_log_streamer(project_id, b_proc, "BACKEND", log_file_path)
+            except Exception as e:
+                logger.error(f"Failed to spawn backend for {project_id}: {e}")
 
-        try:
-            new_proc = subprocess.Popen(
-                cmd,
-                shell=True,
-                cwd=target_path,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1
-            )
-            self._active_processes[project_id] = new_proc
-            self._update_db_status(project_id, "RUNNING", allocated_port, new_proc.pid)
+        # 2. Spawn React/Vite Frontend if package.json exists
+        if os.path.exists(package_json) and os.path.exists(node_modules):
+            f_cmd = f"npx vite --port {frontend_port} --host"
+            logger.info(f"Launching Vite Frontend for {project_id} on port {frontend_port}: {f_cmd}")
+            try:
+                f_proc = subprocess.Popen(
+                    f_cmd,
+                    shell=True,
+                    cwd=target_path,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,
+                    creationflags=creation_flags
+                )
+                spawned_procs.append(f_proc)
+                commands_run.append(f_cmd)
+                self._start_log_streamer(project_id, f_proc, "FRONTEND", log_file_path)
+            except Exception as e:
+                logger.error(f"Failed to spawn frontend for {project_id}: {e}")
+        elif not spawned_procs:
+            # Fallback static server
+            s_cmd = f'"{py_exec}" -m http.server {primary_port}'
+            logger.info(f"Launching Static HTTP server for {project_id} on port {primary_port}: {s_cmd}")
+            try:
+                s_proc = subprocess.Popen(
+                    s_cmd,
+                    shell=True,
+                    cwd=target_path,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1
+                )
+                spawned_procs.append(s_proc)
+                commands_run.append(s_cmd)
+                self._start_log_streamer(project_id, s_proc, "STATIC", log_file_path)
+            except Exception as e:
+                logger.error(f"Failed to spawn static server for {project_id}: {e}")
 
-            # Start stdout and stderr log capture threads
-            self._start_log_streamer(project_id, new_proc)
+        if not spawned_procs:
+            return {"success": False, "error": "No processes could be spawned."}
 
+        self._active_processes[project_id] = spawned_procs
+        main_pid = spawned_procs[0].pid
+        self._update_db_status(project_id, "RUNNING", primary_port, main_pid)
+
+        # Quick startup health diagnostic check (wait 1.5s to see if process immediately crashes)
+        time.sleep(1.5)
+        crashed = [p for p in spawned_procs if p.poll() is not None and p.poll() != 0]
+        if crashed:
+            startup_logs = self.get_project_logs(project_id, tail=20)
+            err_msg = "Server crashed immediately after launch:\n" + "\n".join(startup_logs)
+            logger.error(f"Startup crash detected for {project_id}: {err_msg}")
             return {
-                "success": True,
+                "success": False,
+                "error": err_msg,
                 "project_id": project_id,
-                "status": "RUNNING",
-                "port": allocated_port,
-                "pid": new_proc.pid,
-                "preview_url": preview_url,
-                "command": cmd
+                "startup_logs": startup_logs
             }
-        except Exception as e:
-            logger.error(f"Failed to start server for {project_id}: {e}")
-            return {"success": False, "error": str(e)}
 
-    def _start_log_streamer(self, project_id: str, proc: subprocess.Popen) -> None:
-        def stream_output(pipe, prefix: str):
+        preview_url = f"http://localhost:{primary_port}"
+        return {
+            "success": True,
+            "project_id": project_id,
+            "status": "RUNNING",
+            "port": primary_port,
+            "backend_port": backend_port,
+            "frontend_port": frontend_port,
+            "pid": main_pid,
+            "preview_url": preview_url,
+            "commands": commands_run
+        }
+
+    def _start_log_streamer(self, project_id: str, proc: subprocess.Popen, prefix: str, log_file_path: str) -> None:
+        def stream_output(pipe, tag: str):
             try:
                 for line in iter(pipe.readline, ''):
                     if not line:
                         break
-                    clean_line = f"[{prefix}] {line.rstrip()}"
-                    self._project_logs[project_id].append(clean_line)
+                    sanitized = clean_terminal_log_line(line)
+                    if sanitized:
+                        clean_line = f"[{prefix}:{tag}] {sanitized}"
+                        self._project_logs[project_id].append(clean_line)
+                        try:
+                            with open(log_file_path, "a", encoding="utf-8") as f:
+                                f.write(clean_line + "\n")
+                        except Exception:
+                            pass
             except Exception:
                 pass
             finally:
-                pipe.close()
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
 
         t_out = threading.Thread(target=stream_output, args=(proc.stdout, "STDOUT"), daemon=True)
         t_err = threading.Thread(target=stream_output, args=(proc.stderr, "STDERR"), daemon=True)
         t_out.start()
         t_err.start()
-        self._log_threads[project_id] = [t_out, t_err]
+        self._log_threads[project_id].extend([t_out, t_err])
 
     def stop_project_server(self, project_id: str) -> Dict[str, Any]:
         """
-        Stops a running application server process.
+        Stops all running application server processes for project and scavenges ports.
         """
-        proc = self._active_processes.get(project_id)
-        if proc:
-            try:
-                proc.terminate()
-                proc.wait(timeout=3)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-            self._active_processes.pop(project_id, None)
+        project = self.get_project(project_id)
+        b_port = project.get("backend_port") if project else None
+        f_port = project.get("frontend_port") if project else None
+        a_port = project.get("active_port") if project else None
+
+        procs = self._active_processes.pop(project_id, [])
+        for proc in procs:
+            if proc.poll() is None:
+                kill_process_tree(proc.pid)
+
+        # Force scavenge ports
+        for port in (b_port, f_port, a_port):
+            if port:
+                kill_process_on_port(port)
 
         self._update_db_status(project_id, "STOPPED", None, None)
         return {
             "success": True,
             "project_id": project_id,
             "status": "STOPPED",
-            "message": "Server stopped successfully."
+            "message": "Server stopped successfully and ports freed."
         }
 
     def get_project_logs(self, project_id: str, tail: int = 100) -> List[str]:
         """
-        Returns recent log lines for the given project.
+        Returns recent log lines for the given project with ANSI escape codes stripped.
         """
         logs = list(self._project_logs.get(project_id, []))
-        return logs[-tail:] if tail > 0 else logs
+        if not logs:
+            project = self.get_project(project_id)
+            if project and project.get("target_path"):
+                log_file = os.path.join(project["target_path"], "sentinel_server.log")
+                if os.path.exists(log_file):
+                    try:
+                        with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+                            file_lines = f.readlines()
+                            logs = [clean_terminal_log_line(line) for line in file_lines]
+                    except Exception:
+                        pass
+        raw_tail = logs[-tail:] if tail > 0 else logs
+        return [clean_terminal_log_line(line) for line in raw_tail]
+
+
 
     def export_project_zip(self, project_id: str, export_dir: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -362,6 +621,22 @@ class ProjectsManager:
         project = self.get_project(project_id)
         if not project:
             return {"success": False, "error": f"Project '{project_id}' not found."}
+
+        # ── Sentinel Self-Protection Guard ────────────────────────────────────────
+        # Never allow deletion/purge of the CUA-Sentinel installation directory.
+        target_path_check = os.path.abspath(project.get("target_path", ""))
+        _sentinel_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        if os.path.normcase(target_path_check) == os.path.normcase(_sentinel_root):
+            logger.error(
+                "Sentinel Self-Protection: BLOCKED attempt to delete CUA-Sentinel itself "
+                f"(project_id={project_id}). This operation is permanently forbidden."
+            )
+            return {
+                "success": False,
+                "error": "SENTINEL_PROTECTED: Cannot delete or purge the CUA-Sentinel installation directory. "
+                         "This project is protected from accidental deletion."
+            }
+        # ─────────────────────────────────────────────────────────────────────────
 
         # Stop server if running
         self.stop_project_server(project_id)

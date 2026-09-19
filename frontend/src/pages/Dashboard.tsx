@@ -15,6 +15,7 @@ import GmailTriagePanel from '../components/gmail/GmailTriagePanel'
 import CodingPanel from '../components/coding/CodingPanel'
 import { ProjectsPanel } from '../components/projects/ProjectsPanel'
 import NotificationModal from '../components/notifications/NotificationModal'
+import { ErrorBoundary } from '../components/common/ErrorBoundary'
 import './Dashboard.css'
 
 type Tab = 'chat' | 'queue' | 'system' | 'approvals' | 'finance' | 'links' | 'gmail' | 'coding' | 'projects'
@@ -150,8 +151,9 @@ export default function Dashboard() {
         setChatLoading(false)
         sendInFlightRef.current = false
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error sending chat message:', err)
+      setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ **Connection Error**\n\nFailed to reach the backend. Please check that the server is running at http://localhost:8000.\n\n_Error: ${err.message || 'Network error'}_` }])
       setChatLoading(false)
       sendInFlightRef.current = false
     }
@@ -238,36 +240,36 @@ export default function Dashboard() {
       {/* Main Full-Width & Grid Views */}
       {activeTab === 'coding' ? (
         <main style={{ padding: '8px 16px', width: '100%', flex: 1, minHeight: 0, overflow: 'auto' }}>
-          <CodingPanel />
+          <ErrorBoundary fallbackTitle="Code Refactor"><CodingPanel /></ErrorBoundary>
         </main>
       ) : activeTab === 'projects' ? (
         <main style={{ padding: '8px 16px', width: '100%', flex: 1, minHeight: 0, overflow: 'auto' }}>
-          <ProjectsPanel />
+          <ErrorBoundary fallbackTitle="Projects"><ProjectsPanel /></ErrorBoundary>
         </main>
       ) : activeTab === 'finance' ? (
         <main style={{ padding: 16, maxWidth: 1200, margin: '0 auto', width: '100%' }}>
-          <FinancePanel />
+          <ErrorBoundary fallbackTitle="Finance"><FinancePanel /></ErrorBoundary>
         </main>
       ) : activeTab === 'links' ? (
         <main style={{ padding: 16, maxWidth: 1200, margin: '0 auto', width: '100%' }}>
-          <LinksPanel />
+          <ErrorBoundary fallbackTitle="Links"><LinksPanel /></ErrorBoundary>
         </main>
       ) : activeTab === 'gmail' ? (
         <main style={{ padding: 16, maxWidth: 1200, margin: '0 auto', width: '100%' }}>
-          <GmailTriagePanel />
+          <ErrorBoundary fallbackTitle="Gmail Triage"><GmailTriagePanel /></ErrorBoundary>
         </main>
       ) : (
         <main className="main-grid">
           <aside className="side-column">
-            <SystemStatus />
-            <TaskQueue />
+            <ErrorBoundary fallbackTitle="System Status"><SystemStatus /></ErrorBoundary>
+            <ErrorBoundary fallbackTitle="Task Queue"><TaskQueue /></ErrorBoundary>
           </aside>
           <section className="center-column">
-            <ChatPanel {...chatProps} />
+            <ErrorBoundary fallbackTitle="Chat"><ChatPanel {...chatProps} /></ErrorBoundary>
           </section>
           <aside className="right-column">
-            <HITLPanel />
-            <DigestPanel />
+            <ErrorBoundary fallbackTitle="Approvals"><HITLPanel /></ErrorBoundary>
+            <ErrorBoundary fallbackTitle="Digests"><DigestPanel /></ErrorBoundary>
           </aside>
         </main>
       )}

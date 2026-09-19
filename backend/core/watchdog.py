@@ -34,12 +34,27 @@ class Watchdog:
                 await self._check_leases()
                 await self._check_ollama_health()
                 await self._check_safe_mode_conditions()
+                await self._check_preemption()
             except Exception as e:
                 logger.error(f"Watchdog error: {e}")
 
             await asyncio.sleep(self.config["heartbeat_check_interval_sec"])
 
         logger.info("Watchdog stopped.")
+
+    async def _check_preemption(self) -> None:
+        claim = self.scheduler._current_claim
+        if not claim or claim.priority <= 0:
+            return
+
+        # Generalized preemption: if any waiting task has strictly higher priority (lower int)
+        target_priority = claim.priority - 1
+        if self.scheduler.queue.has_waiting_task_at_or_above_priority(target_priority):
+            logger.info(
+                f"Watchdog: Preemption condition met. Task {claim.task_id} (priority {claim.priority}) "
+                f"preempting for incoming task with priority <= {target_priority}."
+            )
+            self.scheduler.request_preemption()
 
     async def _check_leases(self) -> None:
         expired = self.scheduler.queue.expire_stale_leases()

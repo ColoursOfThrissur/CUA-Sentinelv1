@@ -637,7 +637,33 @@
     align-items: flex-start;
   }
 
-  .refactor-scan-placeholder button {
-    margin-left: 0;
-  }
+}
+
+.refactor-tab-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 100%;
+}
+
+.refactor-view-mode-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 100%;
+}
+
+.refactor-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+  width: 100%;
+}
+
+.refactor-editor-container {
+  width: 100%;
+  min-height: 550px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
 }

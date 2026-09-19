@@ -1,43 +1,43 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-/* ─── Design tokens ─────────────────────────────────────────── */
+/* ─── Design tokens (Obsidian Dark Theme Default) ─────────────── */
 :root {
-  --c-cyan:         #22d3ee;
-  --c-cyan-dim:     rgba(103,232,249,0.9);
-  --c-cyan-soft:    rgba(165,243,252,0.9);
-  --c-indigo:       #4f46e5;
-  --c-purple:       #8b5cf6;
-  --c-green:        #4ade80;
-  --c-yellow:       #facc15;
+  --c-cyan:         #38bdf8;
+  --c-cyan-dim:     rgba(56,189,248,0.85);
+  --c-cyan-soft:    rgba(186,230,253,0.9);
+  --c-indigo:       #6366f1;
+  --c-purple:       #a855f7;
+  --c-green:        #34d399;
+  --c-yellow:       #fbbf24;
   --c-red:          #f87171;
   --c-orange:       #fb923c;
   --c-slate:        #64748b;
 
-  --bg-page:        #07090f;
-  --bg-surface:     rgba(18,22,34,0.72);
-  --bg-surface-lo:  rgba(10,12,18,0.72);
-  --bg-overlay:     rgba(7,9,15,0.96);
-  --bg-input:       rgba(15,23,42,0.75);
-  --bg-subtle:      rgba(255,255,255,0.04);
-  --bg-subtle-hi:   rgba(255,255,255,0.07);
+  --bg-page:        #090d16;
+  --bg-surface:     rgba(15, 23, 42, 0.78);
+  --bg-surface-lo:  rgba(10, 15, 28, 0.82);
+  --bg-overlay:     rgba(9, 13, 22, 0.96);
+  --bg-input:       rgba(15, 23, 42, 0.9);
+  --bg-subtle:      rgba(255, 255, 255, 0.04);
+  --bg-subtle-hi:   rgba(255, 255, 255, 0.08);
 
-  --border-base:    rgba(148,163,184,0.08);
-  --border-mid:     rgba(148,163,184,0.16);
-  --border-subtle:  rgba(255,255,255,0.06);
-  --border-cyan:    rgba(103,232,249,0.22);
+  --border-base:    rgba(255, 255, 255, 0.08);
+  --border-mid:     rgba(255, 255, 255, 0.14);
+  --border-subtle:  rgba(255, 255, 255, 0.06);
+  --border-cyan:    rgba(56, 189, 248, 0.28);
 
-  --text-base:      #dde4f0;
-  --text-muted:     rgba(226,232,240,0.6);
-  --text-dim:       rgba(203,213,225,0.4);
-  --text-faint:     rgba(255,255,255,0.3);
+  --text-base:      #f1f5f9;
+  --text-muted:     #94a3b8;
+  --text-dim:       #64748b;
+  --text-faint:     #475569;
 
   --r-sm:   8px;
   --r-md:   12px;
   --r-lg:   14px;
   --r-pill: 99px;
 
-  --shadow-cyan:  0 0 14px rgba(8,145,178,0.25);
-  --shadow-card:  0 8px 30px rgba(8,145,178,0.06), inset 0 1px 0 rgba(255,255,255,0.02);
+  --shadow-cyan:  0 0 16px rgba(56, 189, 248, 0.22);
+  --shadow-card:  0 8px 32px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 /* ─── Light Theme Tokens & Overrides ────────────────────────── */

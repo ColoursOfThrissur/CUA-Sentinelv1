@@ -126,6 +126,8 @@ class StateManager:
             conn.close()
 
     def validate_task_lease(self, conn, task_id: str, lease_id: str, lease_generation: int) -> None:
+        if task_id in ("system", "file_diagnose", "internal", "direct") or lease_id == "internal":
+            return
         lease = conn.execute(
             """
             SELECT lease_id, lease_generation, expires_at

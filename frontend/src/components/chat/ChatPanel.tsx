@@ -35,7 +35,7 @@ export default function ChatPanel({ messages, input, loading, webEnabled, pendin
   const navigate  = useNavigate()
   const [isFocused, setIsFocused] = useState(false)
   const [expandedTraces, setExpandedTraces] = useState<Record<string, boolean>>({})
-  const { agentTraces, hitlPending } = useSentinelStore()
+  const { agentTraces, hitlPending, telemetry } = useSentinelStore()
   const safeMessages = Array.isArray(messages) ? messages : []
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [safeMessages, loading])
@@ -78,7 +78,7 @@ export default function ChatPanel({ messages, input, loading, webEnabled, pendin
         </div>
         <div className="chat-header-pills">
           <span className="pill pill-cyan">P0 Chat</span>
-          <span className="pill pill-subtle">Local GPU (12GB)</span>
+          <span className="pill pill-subtle">Local GPU ({telemetry?.vram_total_mb ? `${Math.round(telemetry.vram_total_mb / 1024)}GB` : 'GPU'})</span>
           <button
             onClick={() => onToggleWeb(!webEnabled)}
             className={`btn ${webEnabled ? 'btn-primary' : 'btn-ghost'}`}
@@ -134,27 +134,43 @@ export default function ChatPanel({ messages, input, loading, webEnabled, pendin
                 {/* Generative Interactive Stock Quote Card */}
                 {m.role === 'assistant' && (() => {
                   const contentLower = m.content.toLowerCase()
+
+                  // Configurable ticker lookup — easy to extend
+                  const KNOWN_TICKERS: Record<string, [string, string]> = {
+                    'c3.ai': ['C3.ai, Inc.', 'AI'], 'c3 ai': ['C3.ai, Inc.', 'AI'], 'ticker: ai': ['C3.ai, Inc.', 'AI'],
+                    'nvidia': ['NVIDIA Corp', 'NVDA'], 'nvda': ['NVIDIA Corp', 'NVDA'],
+                    'apple': ['Apple Inc.', 'AAPL'], 'aapl': ['Apple Inc.', 'AAPL'],
+                    'microsoft': ['Microsoft Corp', 'MSFT'], 'msft': ['Microsoft Corp', 'MSFT'],
+                    'tesla': ['Tesla, Inc.', 'TSLA'], 'tsla': ['Tesla, Inc.', 'TSLA'],
+                    'bitcoin': ['Bitcoin', 'BTC-USD'], 'btc': ['Bitcoin', 'BTC-USD'],
+                    'google': ['Alphabet Inc.', 'GOOGL'], 'googl': ['Alphabet Inc.', 'GOOGL'], 'alphabet': ['Alphabet Inc.', 'GOOGL'],
+                    'amazon': ['Amazon.com Inc.', 'AMZN'], 'amzn': ['Amazon.com Inc.', 'AMZN'],
+                    'meta': ['Meta Platforms', 'META'], 'facebook': ['Meta Platforms', 'META'],
+                    'ethereum': ['Ethereum', 'ETH-USD'], 'eth': ['Ethereum', 'ETH-USD'],
+                    'reliance': ['Reliance Industries', 'RELIANCE.NS'],
+                    'tcs': ['Tata Consultancy Services', 'TCS.NS'],
+                    'infosys': ['Infosys Ltd', 'INFY.NS'], 'infy': ['Infosys Ltd', 'INFY.NS'],
+                  }
+
                   let tickerName = ""
                   let tickerSymbol = ""
 
-                  if (contentLower.includes('c3.ai') || contentLower.includes('c3 ai') || contentLower.includes('ticker: ai')) {
-                    tickerName = "C3.ai, Inc."
-                    tickerSymbol = "AI"
-                  } else if (contentLower.includes('nvidia') || contentLower.includes('nvda')) {
-                    tickerName = "NVIDIA Corp"
-                    tickerSymbol = "NVDA"
-                  } else if (contentLower.includes('apple') || contentLower.includes('aapl')) {
-                    tickerName = "Apple Inc."
-                    tickerSymbol = "AAPL"
-                  } else if (contentLower.includes('microsoft') || contentLower.includes('msft')) {
-                    tickerName = "Microsoft Corp"
-                    tickerSymbol = "MSFT"
-                  } else if (contentLower.includes('tesla') || contentLower.includes('tsla')) {
-                    tickerName = "Tesla, Inc."
-                    tickerSymbol = "TSLA"
-                  } else if (contentLower.includes('bitcoin') || contentLower.includes('btc')) {
-                    tickerName = "Bitcoin"
-                    tickerSymbol = "BTC-USD"
+                  // Check known tickers first
+                  for (const [keyword, [name, symbol]] of Object.entries(KNOWN_TICKERS)) {
+                    if (contentLower.includes(keyword)) {
+                      tickerName = name
+                      tickerSymbol = symbol
+                      break
+                    }
+                  }
+
+                  // Fallback: detect $SYMBOL patterns (e.g. $AAPL, $TSLA)
+                  if (!tickerSymbol) {
+                    const dollarMatch = m.content.match(/\$([A-Z]{2,5}(?:\.[A-Z]{2})?)/);
+                    if (dollarMatch) {
+                      tickerSymbol = dollarMatch[1]
+                      tickerName = tickerSymbol
+                    }
                   }
 
                   if (!tickerSymbol) return null

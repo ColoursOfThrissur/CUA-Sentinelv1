@@ -107,16 +107,21 @@ class ModelManager:
         model_id = self.routing.get(workflow_type)
         if not model_id:
             # Fallback to default ENDPOINT model if unknown workflow type
-            model_id = self.routing.get("ENDPOINT", "qwen3_5_9b")
+            model_id = self.routing.get("ENDPOINT", "qwen3_14b_q4")
             logger.info(f"Unmapped workflow '{workflow_type}', falling back to model '{model_id}'")
         return model_id
 
     def load_model(self, model_id: str, context_budget: int) -> bool:
+        # If another model is currently loaded in VRAM, evict it first to free GPU VRAM
+        if self._current_model_id and self._current_model_id != model_id:
+            logger.info(f"ModelManager: Evicting loaded model '{self._current_model_id}' before loading '{model_id}'")
+            self.unload_current()
+
         try:
             self.evaluate_admission(model_id, context_budget)
         except ModelAdmissionError as mae:
-            # Fallback to lighter coding/reasoning model if VRAM/geometry check failed
-            fallback_id = "qwen2_5_coder_latest" if model_id != "qwen2_5_coder_latest" else "qwen3_5_9b"
+            # Fallback to 9B model if VRAM/geometry check failed
+            fallback_id = "qwen3_5_9b" if model_id != "qwen3_5_9b" else "phi3_latest"
             logger.warning(f"Admission failed for {model_id} ({mae}). Retrying with fallback: {fallback_id}")
             model_id = fallback_id
 
@@ -174,7 +179,9 @@ class ModelManager:
         except Exception as e:
             self._set_model_state(model_id, "FAILED")
             logger.error(f"Failed to load model {model_id}: {e}")
-            # Mark current model id anyway so generate call attempts Ollama request
+            if model_id != "qwen3_5_9b" and "qwen3_5_9b" in self.models_by_id:
+                logger.warning(f"Attempting fallback to 'qwen3_5_9b' after load failure for '{model_id}'")
+                return self.load_model("qwen3_5_9b", context_budget)
             self._current_model_id = model_id
             return False
 
@@ -206,6 +213,24 @@ class ModelManager:
                 t_row = conn.execute("SELECT status FROM tasks WHERE task_id = ?", (model_row["busy_task_id"],)).fetchone()
                 if not t_row or t_row["status"] not in ("RUNNING", "CLAIMED"):
                     conn.execute("UPDATE models_registry SET current_state = 'READY', busy_task_id = NULL WHERE model_id = ?", (model_id,))
+                    model_row = conn.execute(
+                        "SELECT current_state, busy_task_id, model_lease_generation FROM models_registry WHERE model_id = ?",
+                        (model_id,),
+                    ).fetchone()
+
+            is_valid_state = model_row and (
+                model_row["current_state"] in ("READY", "IDLE") or
+                (model_row["current_state"] == "BUSY" and model_row["busy_task_id"] == task_id)
+            )
+
+            # If target model is UNLOADED, attempt to auto-load it
+            if not is_valid_state and (not model_row or model_row["current_state"] == "UNLOADED"):
+                logger.info(f"Model '{model_id}' is UNLOADED; attempting auto-load...")
+                conn.execute("COMMIT")  # Commit immediate transaction before load_model call
+                loaded = self.load_model(model_id, context_budget)
+                conn = get_operational_db()
+                conn.execute("BEGIN IMMEDIATE")
+                if loaded:
                     model_row = conn.execute(
                         "SELECT current_state, busy_task_id, model_lease_generation FROM models_registry WHERE model_id = ?",
                         (model_id,),
@@ -252,6 +277,9 @@ class ModelManager:
                 conn.execute("ROLLBACK")
                 raise ModelLeaseError(f"Model {model_id} not ready (state={model_row['current_state'] if model_row else 'MISSING'})")
 
+            t_exists = conn.execute("SELECT 1 FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+            busy_tid = task_id if t_exists else None
+
             conn.execute(
                 """
                 UPDATE models_registry
@@ -259,7 +287,7 @@ class ModelManager:
                 WHERE model_id = ?
                   AND model_lease_generation = ?
                 """,
-                (task_id, model_id, model_row["model_lease_generation"]),
+                (busy_tid, model_id, model_row["model_lease_generation"]),
             )
             conn.execute("COMMIT")
         except (ModelLeaseError, LeaseValidationError) as e:
@@ -271,6 +299,7 @@ class ModelManager:
             conn.close()
 
         m = self.models_by_id[model_id]
+        context_budget = min(context_budget, m.get("context_limit_max", 8192))
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -364,6 +393,26 @@ class ModelManager:
             logger.info(f"Unloaded model {model_id}")
         except Exception as e:
             logger.error(f"Failed to unload model {model_id}: {e}")
+
+    def release_task_lease(self, task_id: str) -> None:
+        """
+        Explicitly clears any model leases held by task_id in models_registry.
+        Ensures preemption immediately marks the model as READY so high-priority
+        tasks never deadlock on a busy model lock.
+        """
+        conn = get_operational_db()
+        try:
+            res = conn.execute(
+                "UPDATE models_registry SET current_state = 'READY', busy_task_id = NULL WHERE busy_task_id = ?",
+                (task_id,),
+            )
+            conn.commit()
+            if res.rowcount > 0:
+                logger.info(f"ModelManager: Released busy model lease for preempted/cancelled task {task_id}")
+        except Exception as e:
+            logger.error(f"Error releasing model lease for {task_id}: {e}")
+        finally:
+            conn.close()
 
     def _set_model_state(self, model_id: str, state: str, clear_busy: bool = False) -> None:
         allowed = {

@@ -20,7 +20,7 @@ class PathSecurityViolation(Exception):
     pass
 
 PROTECTED_EXCLUSION_NAMES = {
-    ".git", ".env", ".sentinel_backup",
+    ".git", ".sentinel_backup",
     "operational.sqlite", "audit.sqlite", "projects.sqlite", "knowledge.sqlite", "features.sqlite"
 }
 

@@ -1,8 +1,10 @@
+import os
+import sys
+# Guarantee backend/ directory is on sys.path regardless of execution directory
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import asyncio
 import logging
-import os
-import signal
-import sys
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -32,7 +34,6 @@ logging.basicConfig(
 logger = logging.getLogger("sentinel.main")
 
 BOOT_ID = str(uuid.uuid4())
-
 
 async def startup(app: FastAPI) -> None:
     logger.info(f"CUA-Sentinel starting. Boot ID: {BOOT_ID}")
@@ -72,27 +73,44 @@ async def startup(app: FastAPI) -> None:
         logger.info(f"Pre-loaded default model: {default_model}")
     except Exception as e:
         logger.warning(f"Could not pre-load default model: {e}")
+
     watchdog = Watchdog(config, scheduler, model_manager)
 
     from core.cron_engine import CronEngine
     from core.router import AgentRegistry
     from agents.cua_agent import CUAAgent
     from agents.code_refactor_agent import CodeRefactorAgent
+    from agents.endpoint_agent import EndpointAgent
+    from agents.researcher import ResearcherAgent
+    from agents.synthesizer import SynthesizerAgent
+    from agents.project_repair_agent import ProjectRepairAgent
+    from agents.research_cycle_agent import ResearchCycleAgent
     from core.discord_bot import DiscordSentinelBot
     from core.scheduler_engine import SchedulerEngine
-    AgentRegistry.register("CUA", CUAAgent)
+    from core.project_health_daemon import project_health_daemon
+
+    # Wire unified task_queue to project_health_daemon
+    project_health_daemon.task_queue = task_queue
+
+    # Consolidated Single Source of Truth Agent Registry
+    AgentRegistry.register("ENDPOINT", EndpointAgent)
+    AgentRegistry.register("FINANCE", EndpointAgent)
+    AgentRegistry.register("BOOKMARK", EndpointAgent)
+    AgentRegistry.register("PROJECT_HEALTH_REPAIR", ProjectRepairAgent)
+    AgentRegistry.register("RESEARCH_CYCLE", ResearchCycleAgent)
     AgentRegistry.register("CODE_REFACTOR", CodeRefactorAgent)
     AgentRegistry.register("SCAFFOLDER", CodeRefactorAgent)
     AgentRegistry.register("REFACTOR", CodeRefactorAgent)
     AgentRegistry.register("TESTER", CodeRefactorAgent)
     AgentRegistry.register("REVIEWER", CodeRefactorAgent)
-    AgentRegistry.register("ENDPOINT", CUAAgent)
-    AgentRegistry.register("RESEARCHER", CUAAgent)
-    AgentRegistry.register("SYNTHESIZER", CUAAgent)
+    AgentRegistry.register("RESEARCHER", ResearcherAgent)
+    AgentRegistry.register("RESEARCH", ResearcherAgent)
+    AgentRegistry.register("SYNTHESIZER", SynthesizerAgent)
+    AgentRegistry.register("CUA", CUAAgent)
     AgentRegistry.register("SECOND_BRAIN", CUAAgent)
     AgentRegistry.register("SYNTHETIC_DATA", CUAAgent)
 
-    cron_engine = CronEngine(config)
+    cron_engine = CronEngine(config, task_queue=task_queue)
     await cron_engine.start()
 
     # Initialize Discord 2-Way Bot Service if configured
@@ -136,7 +154,6 @@ async def startup(app: FastAPI) -> None:
 
     logger.info("CUA-Sentinel fully started.")
 
-
 async def shutdown(app: FastAPI) -> None:
     logger.info("CUA-Sentinel shutting down cleanly...")
 
@@ -170,13 +187,12 @@ async def shutdown(app: FastAPI) -> None:
 
     logger.info("CUA-Sentinel shutdown complete.")
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await startup(app)
     yield
-    await shutdown(app)
-
+# Module-level FastAPI app instance for Uvicorn CLI discovery (e.g. uvicorn main:app)
+app = create_app(lifespan)
 
 def main():
     config = load_system_config()

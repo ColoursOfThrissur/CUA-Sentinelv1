@@ -62,17 +62,16 @@ class DesktopTool:
                 }
             except Exception as e:
                 logger.error(f"Error grabbing screen with PIL: {e}")
+                return {
+                    "status": "FAILED",
+                    "error": f"Failed to capture screen: {e}",
+                    "note": "Screen capture threw an exception",
+                }
 
         return {
-            "status": "MOCK_SUCCESS",
-            "width": 1920,
-            "height": 1080,
-            "scaled_width": 1280,
-            "scaled_height": 720,
-            "format": "JPEG",
-            "size_kb": 1.2,
-            "image_b64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
-            "note": "Desktop display captured",
+            "status": "FAILED",
+            "error": "PIL/Pillow library not available",
+            "note": "Install Pillow package to enable desktop screenshot capture",
         }
 
     def get_active_window(self) -> Dict[str, Any]:
@@ -153,8 +152,16 @@ class DesktopTool:
                 return {"status": "SUCCESS", "action": "CLICK", "x": x, "y": y}
             except Exception as e:
                 logger.error(f"PyAutoGUI click error: {e}")
+                return {"status": "FAILED", "action": "CLICK", "x": x, "y": y, "error": str(e)}
 
-        return {"status": "EXECUTED", "action": "CLICK", "x": x, "y": y, "note": "Target coordinate clicked"}
+        return {
+            "status": "FAILED",
+            "action": "CLICK",
+            "x": x,
+            "y": y,
+            "error": "PyAutoGUI library not available",
+            "note": "Install pyautogui package to enable desktop interaction",
+        }
 
     def type_text(self, text: str) -> Dict[str, Any]:
         """
@@ -166,5 +173,12 @@ class DesktopTool:
                 return {"status": "SUCCESS", "action": "TYPE", "text": text}
             except Exception as e:
                 logger.error(f"PyAutoGUI type error: {e}")
+                return {"status": "FAILED", "action": "TYPE", "text": text, "error": str(e)}
 
-        return {"status": "EXECUTED", "action": "TYPE", "text": text}
+        return {
+            "status": "FAILED",
+            "action": "TYPE",
+            "text": text,
+            "error": "PyAutoGUI library not available",
+            "note": "Install pyautogui package to enable desktop interaction",
+        }

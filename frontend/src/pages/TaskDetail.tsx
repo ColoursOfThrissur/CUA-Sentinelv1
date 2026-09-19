@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import { ArrowLeft, Download, Send, ChevronDown, ChevronRight, Activity, MessageSquare, Bot, User } from 'lucide-react'
-import { tasksApi, chatApi } from '../api'
+import { tasksApi, chatApi, modelsApi } from '../api'
 import './TaskDetail.css'
 
 export default function TaskDetail() {
@@ -12,6 +12,15 @@ export default function TaskDetail() {
   const [replyInput, setReplyInput] = useState('')
   const [replying, setReplying]     = useState(false)
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({})
+  const [activeModelTag, setActiveModelTag] = useState<string>('qwen3:14b-q4_K_M')
+
+  useEffect(() => {
+    modelsApi.getActive().then(r => {
+      if (r.data?.ollama_tag || r.data?.model_name) {
+        setActiveModelTag(r.data.ollama_tag || r.data.model_name)
+      }
+    }).catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (!taskId) return
@@ -201,7 +210,7 @@ export default function TaskDetail() {
                         </div>
                         <div className="step-detail-item">
                           <span className="detail-label" style={{ fontSize: '0.75rem' }}>Execution Actor:</span>
-                          <div style={{ fontSize: '0.82rem', color: 'var(--text-base)' }}>🤖 Local LLM Engine (qwen2.5-coder)</div>
+                          <div style={{ fontSize: '0.82rem', color: 'var(--text-base)' }}>🤖 Local LLM Engine ({activeModelTag})</div>
                         </div>
                         <div className="step-detail-item">
                           <span className="detail-label" style={{ fontSize: '0.75rem' }}>Status:</span>

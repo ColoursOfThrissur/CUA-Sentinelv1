@@ -94,6 +94,29 @@ class TaskQueue:
         finally:
             conn.close()
 
+    def has_waiting_task_at_or_above_priority(self, max_priority: int) -> bool:
+        """
+        Cheap read-only query (no state mutation or claiming) that checks
+        whether any un-leased task exists with priority <= max_priority.
+        Checks both QUEUED and PREEMPTED tasks waiting for worker execution.
+        """
+        conn = get_operational_db()
+        try:
+            row = conn.execute(
+                """
+                SELECT 1 FROM tasks t
+                LEFT JOIN task_leases tl ON t.task_id = tl.task_id
+                WHERE t.status IN ('QUEUED', 'PREEMPTED')
+                  AND tl.task_id IS NULL
+                  AND t.priority <= ?
+                LIMIT 1
+                """,
+                (max_priority,),
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+
     def claim_next_task(self, worker_capabilities: list, allowed_workflows: Optional[list] = None) -> Optional[TaskClaimResult]:
         conn = get_operational_db()
         try:
@@ -102,7 +125,7 @@ class TaskQueue:
                        t.requested_capabilities, t.context_budget, t.input_payload
                 FROM tasks t
                 LEFT JOIN task_leases tl ON t.task_id = tl.task_id
-                WHERE t.status = 'QUEUED' AND tl.task_id IS NULL
+                WHERE t.status IN ('QUEUED', 'PREEMPTED') AND tl.task_id IS NULL
             """
             params = []
             if allowed_workflows:
@@ -143,7 +166,7 @@ class TaskQueue:
                 "SELECT status FROM tasks WHERE task_id = ?", (task["task_id"],)
             ).fetchone()
 
-            if not row or row["status"] != "QUEUED":
+            if not row or row["status"] not in ("QUEUED", "PREEMPTED"):
                 conn.execute("ROLLBACK")
                 return None
 

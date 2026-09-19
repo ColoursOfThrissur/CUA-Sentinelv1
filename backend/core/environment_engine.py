@@ -30,22 +30,86 @@ BUILTIN_PYTHON_MODULES = {
     "uuid", "functools", "itertools", "shutil", "zipfile", "traceback", "inspect", "hashlib"
 }
 
+# Mapping of Python import names to actual PyPI package names
+PYTHON_MODULE_TO_PYPI_NAME = {
+    "pil": "Pillow",
+    "cv2": "opencv-python",
+    "sklearn": "scikit-learn",
+    "yaml": "PyYAML",
+    "bs4": "beautifulsoup4",
+    "dotenv": "python-dotenv",
+    "jose": "python-jose[cryptography]",
+    "multipart": "python-multipart",
+    "fitz": "PyMuPDF",
+    "serial": "pyserial",
+    "dateutil": "python-dateutil",
+    "win32api": "pywin32",
+    "win32con": "pywin32",
+    "win32com": "pywin32",
+    "websocket": "websocket-client",
+    "jwt": "PyJWT",
+    "psycopg2": "psycopg2-binary",
+    "crypto": "pycryptodome",
+    "docx": "python-docx",
+    "pptx": "python-pptx",
+    "openpyxl": "openpyxl",
+    "wx": "wxPython",
+    "skimage": "scikit-image",
+    "pg": "psycopg2-binary",
+    "mysql": "mysql-connector-python",
+    "distutils": "setuptools"
+}
+
 class EnvironmentEngine:
     def __init__(self):
         pass
 
+    def get_python_venv_executables(self, project_path: str) -> Dict[str, str]:
+        import sys
+        venv_dirs = [".venv", "venv"]
+        for v_dir in venv_dirs:
+            v_path = os.path.join(project_path, v_dir)
+            if os.path.exists(v_path):
+                if os.name == "nt":
+                    py_exe = os.path.join(v_path, "Scripts", "python.exe")
+                    pip_exe = os.path.join(v_path, "Scripts", "pip.exe")
+                else:
+                    py_exe = os.path.join(v_path, "bin", "python")
+                    pip_exe = os.path.join(v_path, "bin", "pip")
+                if os.path.exists(py_exe):
+                    return {"python": py_exe, "pip": pip_exe if os.path.exists(pip_exe) else f'"{py_exe}" -m pip'}
+        return {"python": sys.executable, "pip": f'"{sys.executable}" -m pip'}
+
+    def setup_python_virtualenv(self, project_path: str) -> dict:
+        import sys
+        venv_path = os.path.join(project_path, ".venv")
+        already_exists = os.path.exists(venv_path) or os.path.exists(os.path.join(project_path, "venv"))
+        if not already_exists:
+            try:
+                path_security.validate_write_permission(venv_path)
+                logger.info(f"EnvironmentEngine: Creating Python virtual environment (.venv) at {venv_path}")
+                res = subprocess.run([sys.executable, "-m", "venv", ".venv"], cwd=project_path, capture_output=True, text=True, timeout=60)
+                if res.returncode == 0:
+                    logger.info(f"Successfully created .venv at {venv_path}")
+                    return {"venv_path": venv_path, "created": True}
+                else:
+                    logger.warning(f"Failed to create .venv: {res.stderr}")
+                    return {"venv_path": venv_path, "created": False, "error": res.stderr[:200]}
+            except Exception as err:
+                logger.warning(f"Could not create Python virtual environment: {err}")
+                return {"venv_path": venv_path, "created": False, "error": str(err)}
+        return {"venv_path": venv_path, "created": False, "already_existed": True}
+
     def scan_js_ts_imports(self, project_path: str) -> Set[str]:
         """
-        Scans all .ts, .tsx, .js, .jsx files in project directory for third-party import statements.
-        Returns a set of imported package names.
+        Scans all .ts, .tsx, .js, .jsx files in project directory for third-party import & require statements.
+        Captures single-line, multi-line ESM imports, dynamic imports, and CJS require().
         """
         imported_packages = set()
-
-        # Regex for ESM import statements: import ... from 'package-name' or import 'package-name'
-        import_pattern = re.compile(r"import\s+.*?from\s+['\"]([^'\"]+)['\"]|import\s+['\"]([^'\"]+)['\"]")
+        import_pattern = re.compile(r"(?:from|import|require)\s*\(?\s*['\"]([^'\"]+)['\"]")
 
         for root, dirs, files in os.walk(project_path):
-            dirs[:] = [d for d in dirs if d not in (".git", "node_modules", "dist", "build", ".venv", "venv")]
+            dirs[:] = [d for d in dirs if d not in (".git", "node_modules", "dist", "build", ".venv", "venv", "__pycache__")]
             for f in files:
                 if f.endswith((".ts", ".tsx", ".js", ".jsx")):
                     full_p = os.path.join(root, f)
@@ -53,13 +117,10 @@ class EnvironmentEngine:
                         with open(full_p, "r", encoding="utf-8", errors="ignore") as fh:
                             content = fh.read()
                         matches = import_pattern.findall(content)
-                        for m in matches:
-                            pkg = m[0] or m[1]
+                        for pkg in matches:
                             pkg = pkg.strip()
-                            # Ignore relative imports (./ or ../) and baseline CSS imports
-                            if pkg.startswith(".") or pkg.endswith(".css"):
+                            if pkg.startswith(".") or pkg.startswith("@src") or pkg.endswith(".css") or pkg.endswith(".scss"):
                                 continue
-                            # Extract root package name (e.g. 'chart.js/auto' -> 'chart.js', '@scope/pkg/sub' -> '@scope/pkg')
                             parts = pkg.split("/")
                             if pkg.startswith("@") and len(parts) >= 2:
                                 root_pkg = f"{parts[0]}/{parts[1]}"
@@ -75,89 +136,167 @@ class EnvironmentEngine:
 
     def scan_python_imports(self, project_path: str) -> Set[str]:
         """
-        Scans all .py files in project directory for third-party import statements.
+        Scans all .py files using Python AST to extract third-party import statements.
+        Translates import names to canonical PyPI package names.
         """
+        import ast
         imported_packages = set()
         for root, dirs, files in os.walk(project_path):
-            dirs[:] = [d for d in dirs if d not in (".git", "node_modules", ".venv", "venv", "__pycache__")]
+            dirs[:] = [d for d in dirs if d not in (".git", "node_modules", ".venv", "venv", "__pycache__", "backups")]
             for f in files:
                 if f.endswith(".py"):
                     full_p = os.path.join(root, f)
                     try:
                         with open(full_p, "r", encoding="utf-8", errors="ignore") as fh:
                             content = fh.read()
-                        # Match: import pkg or from pkg import ...
-                        matches = re.findall(r"^\s*(?:import|from)\s+([a-zA-Z0-9_]+)", content, re.MULTILINE)
-                        for pkg in matches:
-                            pkg = pkg.strip()
-                            if pkg and pkg not in BUILTIN_PYTHON_MODULES:
-                                imported_packages.add(pkg)
+                        tree = ast.parse(content)
+                        for node in ast.walk(tree):
+                            if isinstance(node, ast.Import):
+                                for alias in node.names:
+                                    mod_name = alias.name.split(".")[0]
+                                    if mod_name:
+                                        pypi_name = PYTHON_MODULE_TO_PYPI_NAME.get(mod_name.lower(), mod_name)
+                                        if pypi_name.lower() not in BUILTIN_PYTHON_MODULES:
+                                            imported_packages.add(pypi_name)
+                            elif isinstance(node, ast.ImportFrom):
+                                if node.module:
+                                    mod_name = node.module.split(".")[0]
+                                    if mod_name:
+                                        pypi_name = PYTHON_MODULE_TO_PYPI_NAME.get(mod_name.lower(), mod_name)
+                                        if pypi_name.lower() not in BUILTIN_PYTHON_MODULES:
+                                            imported_packages.add(pypi_name)
                     except Exception as err:
-                        logger.warning(f"Error scanning Python imports in {full_p}: {err}")
+                        logger.warning(f"Error scanning Python AST imports in {full_p}: {err}")
 
         return imported_packages
 
+    # Directories to skip when discovering manifests
+    MANIFEST_SKIP_DIRS = {
+        "node_modules", ".venv", "venv", ".git", "dist", "build",
+        "__pycache__", ".sentinel_backup", "backups", "data", ".vite"
+    }
+
+    def _find_package_jsons(self, project_path: str) -> List[str]:
+        """
+        Walks the project tree and returns a list of directory paths that contain
+        a real package.json (one with dependencies/devDependencies/scripts),
+        skipping node_modules, backups, .venv, etc.
+        """
+        found = []
+        for root, dirs, files in os.walk(project_path):
+            dirs[:] = [d for d in dirs if d not in self.MANIFEST_SKIP_DIRS]
+            rel = os.path.relpath(root, project_path)
+            depth = len(Path(rel).parts) if rel != "." else 0
+            if depth > 3:
+                dirs.clear()
+                continue
+            if "package.json" in files:
+                pkg_path = os.path.join(root, "package.json")
+                try:
+                    with open(pkg_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if "dependencies" in data or "devDependencies" in data or "scripts" in data:
+                        found.append(root)
+                except Exception:
+                    pass
+        return found
+
+    def _find_requirements_txts(self, project_path: str) -> List[str]:
+        """
+        Walks the project tree and returns a list of absolute paths to requirements.txt files,
+        skipping venv, backups, etc.
+        """
+        found = []
+        for root, dirs, files in os.walk(project_path):
+            dirs[:] = [d for d in dirs if d not in self.MANIFEST_SKIP_DIRS]
+            rel = os.path.relpath(root, project_path)
+            depth = len(Path(rel).parts) if rel != "." else 0
+            if depth > 3:
+                dirs.clear()
+                continue
+            if "requirements.txt" in files:
+                found.append(os.path.join(root, "requirements.txt"))
+        return found
+
     def scan_and_install_dependencies(self, project_path: str) -> Dict[str, Any]:
         """
-        Scans project code for missing dependencies, updates package manifests, and auto-installs missing packages.
+        Scans project code for missing dependencies, updates package manifests, and auto-installs
+        missing packages. Discovers package.json and requirements.txt in subdirectories (e.g.
+        frontend/, backend/) rather than only at the project root. Verifies physical disk presence.
         """
         if not os.path.exists(project_path):
             return {"success": False, "error": f"Project directory does not exist: {project_path}"}
 
         path_security.validate_write_permission(project_path)
-        installed_npm = []
-        installed_pip = []
+        installed_npm: List[str] = []
+        installed_pip: List[str] = []
+        scanned_js_all: Set[str] = set()
+        scanned_py_all: Set[str] = set()
+        installation_logs: List[str] = []
+        venv_created = False
+        npm_installed = False
+        node_modules_count = 0
+        pip_packages_count = 0
 
-        # 1. Handle Node.js / React Dependencies
-        package_json_path = os.path.join(project_path, "package.json")
-        if os.path.exists(package_json_path):
-            imported_npm = self.scan_js_ts_imports(project_path)
+        # ── 1. NODE / NPM ─────────────────────────────────────────────────────────
+        pkg_dirs = self._find_package_jsons(project_path)
+        logger.info(f"EnvironmentEngine: Found package.json in {len(pkg_dirs)} location(s): {pkg_dirs}")
+
+        for pkg_dir in pkg_dirs:
+            package_json_path = os.path.join(pkg_dir, "package.json")
             try:
                 with open(package_json_path, "r", encoding="utf-8") as f:
                     pkg_data = json.load(f)
-                
-                existing_deps = set(pkg_data.get("dependencies", {}).keys()).union(set(pkg_data.get("devDependencies", {}).keys()))
-                missing_npm = [p for p in imported_npm if p not in existing_deps]
 
+                existing_deps = (
+                    set(pkg_data.get("dependencies", {}).keys()) |
+                    set(pkg_data.get("devDependencies", {}).keys())
+                )
+
+                # Scan JS/TS imports from this package's directory subtree
+                imported_npm = self.scan_js_ts_imports(pkg_dir)
+                scanned_js_all.update(imported_npm)
+
+                # Check physical presence in node_modules/ as well as manifest declaration
+                node_modules_dir = os.path.join(pkg_dir, "node_modules")
+                missing_npm = []
+                for p in imported_npm:
+                    pkg_physical_dir = os.path.join(node_modules_dir, p)
+                    if p not in existing_deps or not os.path.exists(pkg_physical_dir):
+                        missing_npm.append(p)
+
+                # chart.js peer dependency
                 if ("react-chartjs-2" in missing_npm or "react-chartjs-2" in existing_deps) and "chart.js" not in existing_deps:
                     missing_npm.append("chart.js")
 
-                # Ensure tsconfig.json exists if project contains .ts / .tsx files
-                has_ts_files = any(f.endswith((".ts", ".tsx")) for root, _, files in os.walk(project_path) for f in files if "node_modules" not in root)
-                tsconfig_path = os.path.join(project_path, "tsconfig.json")
-                if has_ts_files and not os.path.exists(tsconfig_path):
+                # Ensure tsconfig.json exists next to package.json if .ts/.tsx files present
+                has_ts = any(
+                    fn.endswith((".ts", ".tsx"))
+                    for r, _, fls in os.walk(pkg_dir)
+                    for fn in fls
+                    if "node_modules" not in r
+                )
+                tsconfig_path = os.path.join(pkg_dir, "tsconfig.json")
+                if has_ts and not os.path.exists(tsconfig_path):
                     try:
-                        path_security.validate_write_permission(tsconfig_path)
                         with open(tsconfig_path, "w", encoding="utf-8") as tf:
-                            tf.write("""{
-  "compilerOptions": {
-    "target": "ES2020",
-    "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "skipLibCheck": true,
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "react-jsx",
-    "strict": false
-  },
-  "include": ["src"]
-}
-""")
-                        logger.info(f"EnvironmentEngine: Auto-scaffolded missing tsconfig.json at {tsconfig_path}")
+                            tf.write('{\n  "compilerOptions": {\n    "target": "ES2020",\n    "useDefineForClassFields": true,\n    "lib": ["ES2020", "DOM", "DOM.Iterable"],\n    "module": "ESNext",\n    "skipLibCheck": true,\n    "moduleResolution": "bundler",\n    "allowImportingTsExtensions": true,\n    "resolveJsonModule": true,\n    "isolatedModules": true,\n    "noEmit": true,\n    "jsx": "react-jsx",\n    "strict": false\n  },\n  "include": ["src"]\n}\n')
+                        logger.info(f"EnvironmentEngine: Created tsconfig.json at {tsconfig_path}")
+                        installation_logs.append("Created default tsconfig.json")
                     except Exception as ts_err:
-                        logger.warning(f"Could not auto-generate tsconfig.json: {ts_err}")
+                        logger.warning(f"Could not create tsconfig.json: {ts_err}")
 
-                # Detect Vite project and ensure vite & @vitejs/plugin-react devDependencies exist
-                has_vite_config = os.path.exists(os.path.join(project_path, "vite.config.ts")) or os.path.exists(os.path.join(project_path, "vite.config.js"))
+                # Vite devDeps check
                 scripts_str = json.dumps(pkg_data.get("scripts", {}))
-                is_vite_project = has_vite_config or "vite" in scripts_str
-
+                has_vite_cfg = os.path.exists(os.path.join(pkg_dir, "vite.config.ts")) or os.path.exists(os.path.join(pkg_dir, "vite.config.js"))
+                is_vite = has_vite_cfg or "vite" in scripts_str
+                missing_dev: List[str] = []
                 updated_manifest = False
-                if is_vite_project:
+                if is_vite:
+                    if "vite" not in existing_deps or not os.path.exists(os.path.join(node_modules_dir, "vite")):
+                        missing_dev.append("vite")
+                    if "@vitejs/plugin-react" not in existing_deps or not os.path.exists(os.path.join(node_modules_dir, "@vitejs", "plugin-react")):
+                        missing_dev.append("@vitejs/plugin-react")
                     if "scripts" not in pkg_data:
                         pkg_data["scripts"] = {}
                     if "dev" not in pkg_data["scripts"]:
@@ -167,81 +306,201 @@ class EnvironmentEngine:
                         pkg_data["scripts"]["build"] = "vite build"
                         updated_manifest = True
 
-                missing_dev_deps = []
-                if is_vite_project:
-                    if "vite" not in existing_deps:
-                        missing_dev_deps.append("vite")
-                    if "@vitejs/plugin-react" not in existing_deps:
-                        missing_dev_deps.append("@vitejs/plugin-react")
+                # React 18 auto-upgrade check for react-dom/client compatibility
+                has_react_dom_client = False
+                for r, _, fls in os.walk(pkg_dir):
+                    if "node_modules" in r:
+                        continue
+                    for fn in fls:
+                        if fn.endswith((".ts", ".tsx", ".js", ".jsx")):
+                            try:
+                                with open(os.path.join(r, fn), "r", encoding="utf-8", errors="ignore") as file_handle:
+                                    if "react-dom/client" in file_handle.read():
+                                        has_react_dom_client = True
+                                        break
+                            except Exception:
+                                pass
+                    if has_react_dom_client:
+                        break
 
-                if missing_npm or missing_dev_deps or updated_manifest:
-                    logger.info(f"EnvironmentEngine: Updating package.json in {project_path}: deps={missing_npm}, devDeps={missing_dev_deps}")
-                    if "dependencies" not in pkg_data:
-                        pkg_data["dependencies"] = {}
-                    if "devDependencies" not in pkg_data:
-                        pkg_data["devDependencies"] = {}
+                if has_react_dom_client:
+                    react_ver = pkg_data.get("dependencies", {}).get("react", "") or pkg_data.get("devDependencies", {}).get("react", "")
+                    if "17." in react_ver or "16." in react_ver or not react_ver:
+                        pkg_data.setdefault("dependencies", {})
+                        pkg_data.setdefault("devDependencies", {})
+                        pkg_data["dependencies"]["react"] = "^18.3.1"
+                        pkg_data["dependencies"]["react-dom"] = "^18.3.1"
+                        pkg_data["devDependencies"]["@types/react"] = "^18.3.11"
+                        pkg_data["devDependencies"]["@types/react-dom"] = "^18.3.1"
+                        updated_manifest = True
+                        logger.info(f"EnvironmentEngine: Auto-upgraded {package_json_path} to React 18 for react-dom/client compatibility.")
 
-                    for m_pkg in missing_npm:
-                        pkg_data["dependencies"][m_pkg] = "*"
-                    for m_dev_pkg in missing_dev_deps:
-                        pkg_data["devDependencies"][m_dev_pkg] = "^4.3.0" if m_dev_pkg.startswith("@vitejs") else ("^5.4.0" if m_dev_pkg == "vite" else "*")
-
+                # Write updated package.json if new deps found
+                if missing_npm or missing_dev or updated_manifest:
+                    pkg_data.setdefault("dependencies", {})
+                    pkg_data.setdefault("devDependencies", {})
+                    for p in missing_npm:
+                        pkg_data["dependencies"][p] = "*"
+                    for p in missing_dev:
+                        pkg_data["devDependencies"][p] = "^4.3.0" if p.startswith("@vitejs") else ("^5.4.0" if p == "vite" else "*")
                     with open(package_json_path, "w", encoding="utf-8") as f:
                         json.dump(pkg_data, f, indent=2)
+                    logger.info(f"EnvironmentEngine: Updated package.json in {pkg_dir}: +deps={missing_npm} +devDeps={missing_dev}")
 
-                    all_to_install = missing_npm + missing_dev_deps
-                    if all_to_install:
-                        cmd = f"npm install {' '.join(all_to_install)} --save"
-                        logger.info(f"Running auto-install command: {cmd}")
-                        res = subprocess.run(cmd, shell=True, cwd=project_path, capture_output=True, text=True, timeout=120)
-                        if res.returncode == 0:
-                            installed_npm.extend(all_to_install)
-                            logger.info(f"Successfully installed npm packages: {all_to_install}")
-                        else:
-                            logger.warning(f"npm install returned non-zero code: {res.stderr}")
+                # Run npm install from this directory
+                need_npm = not os.path.exists(node_modules_dir) or missing_npm or missing_dev or updated_manifest
+                if need_npm:
+                    all_to_install = list(dict.fromkeys(missing_npm + missing_dev))
+                    cmd = f"npm install {' '.join(all_to_install)} --save" if all_to_install else "npm install"
+                    logger.info(f"EnvironmentEngine: Running '{cmd}' in {pkg_dir}")
+                    res = subprocess.run(cmd, shell=True, cwd=pkg_dir, capture_output=True, text=True, timeout=300)
+                    if res.returncode == 0:
+                        installed_npm.extend(all_to_install if all_to_install else ["node_modules installed"])
+                        npm_installed = True
+                        installation_logs.append(f"npm install succeeded ({', '.join(all_to_install) if all_to_install else 'all packages'})")
+                        logger.info(f"EnvironmentEngine: npm install succeeded in {pkg_dir}")
+                    else:
+                        installation_logs.append(f"npm install failed: {res.stderr[:200]}")
+                        logger.warning(f"EnvironmentEngine: npm install failed in {pkg_dir}: {res.stderr[:400]}")
+                else:
+                    npm_installed = True
+
+                # Count packages
+                if node_modules_count == 0 and os.path.exists(node_modules_dir):
+                    try:
+                        node_modules_count = len([
+                            d for d in os.listdir(node_modules_dir)
+                            if os.path.isdir(os.path.join(node_modules_dir, d)) and not d.startswith(".")
+                        ])
+                    except Exception:
+                        pass
+
             except Exception as e:
-                logger.warning(f"Failed to scan/install npm packages for {project_path}: {e}")
+                logger.warning(f"EnvironmentEngine: npm handling failed for {pkg_dir}: {e}")
 
-        # 2. Handle Python Dependencies
-        requirements_txt_path = os.path.join(project_path, "requirements.txt")
-        if os.path.exists(requirements_txt_path) or any(f.endswith(".py") for f in os.listdir(project_path) if os.path.isfile(os.path.join(project_path, f))):
+        # ── 2. PYTHON / PIP ───────────────────────────────────────────────────────
+        req_files = self._find_requirements_txts(project_path)
+        has_py = bool(req_files) or any(
+            fn.endswith(".py")
+            for r, _, fls in os.walk(project_path)
+            for fn in fls
+            if ".venv" not in r and "node_modules" not in r and "backups" not in r
+        )
+
+        if has_py:
+            venv_result = self.setup_python_virtualenv(project_path)
+            venv_created = venv_result.get("created", False)
+            executables = self.get_python_venv_executables(project_path)
+            py_exe = executables["python"]
+            pip_exe = executables["pip"]
+
             imported_python = self.scan_python_imports(project_path)
-            local_modules = set()
+            scanned_py_all.update(imported_python)
+
+            local_modules: Set[str] = set()
             for root, dirs, files in os.walk(project_path):
-                dirs[:] = [d for d in dirs if d not in (".git", "node_modules", ".venv", "venv", "__pycache__")]
+                dirs[:] = [d for d in dirs if d not in (".git", "node_modules", ".venv", "venv", "__pycache__", "backups")]
                 for d in dirs:
                     local_modules.add(d.lower())
-                for f in files:
-                    if f.endswith(".py"):
-                        local_modules.add(os.path.splitext(f)[0].lower())
+                for fn in files:
+                    if fn.endswith(".py"):
+                        local_modules.add(os.path.splitext(fn)[0].lower())
 
-            existing_pip = set()
-            if os.path.exists(requirements_txt_path):
+            # Collect existing pip packages from all discovered requirements.txt files
+            existing_pip: Set[str] = set()
+            for req_path in req_files:
                 try:
-                    with open(requirements_txt_path, "r", encoding="utf-8") as f:
-                        existing_pip = {line.strip().split("==")[0].split(">=")[0].lower() for line in f if line.strip() and not line.startswith("#")}
+                    with open(req_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if line and not line.startswith("#"):
+                                pkg_name = line.split("==")[0].split(">=")[0].split("[")[0].lower()
+                                existing_pip.add(pkg_name)
                 except Exception:
                     pass
 
-            missing_pip = [p for p in imported_python if p.lower() not in existing_pip and p.lower() not in local_modules]
+            # Inspect packages physically installed in .venv
+            installed_in_venv: Set[str] = set()
+            try:
+                freeze_res = subprocess.run(
+                    f'"{py_exe}" -m pip list --format=freeze',
+                    shell=True, cwd=project_path, capture_output=True, text=True, timeout=30
+                )
+                if freeze_res.returncode == 0:
+                    for line in freeze_res.stdout.splitlines():
+                        if "==" in line:
+                            installed_in_venv.add(line.split("==")[0].lower())
+            except Exception:
+                pass
+
+            # A Python package is missing if NOT in requirements.txt OR NOT physically in .venv
+            missing_pip = []
+            for p in imported_python:
+                p_lower = p.lower()
+                if p_lower in local_modules:
+                    continue
+                if p_lower not in existing_pip or p_lower not in installed_in_venv:
+                    missing_pip.append(p)
+
+            root_req = os.path.join(project_path, "requirements.txt")
             if missing_pip:
-                logger.info(f"EnvironmentEngine: Detected missing python packages: {missing_pip}")
+                logger.info(f"EnvironmentEngine: Writing {len(missing_pip)} missing pip packages ({missing_pip}) to {root_req}")
                 try:
-                    with open(requirements_txt_path, "a", encoding="utf-8") as f:
+                    mode = "a" if os.path.exists(root_req) else "w"
+                    with open(root_req, mode, encoding="utf-8") as f:
                         for p in missing_pip:
                             f.write(f"\n{p}")
                     installed_pip.extend(missing_pip)
-                except Exception:
-                    pass
+                    installation_logs.append(f"Added missing pip packages to requirements.txt: {', '.join(missing_pip)}")
+                except Exception as req_err:
+                    logger.warning(f"Could not update requirements.txt: {req_err}")
 
-        # 3. Validate and repair missing relative component/module imports
+            # Install every discovered requirements.txt into .venv if missing packages existed or venv fresh
+            all_req_to_install = req_files if req_files else ([root_req] if os.path.exists(root_req) else [])
+            for req_path in all_req_to_install:
+                try:
+                    pip_cmd = f'"{py_exe}" -m pip install -r "{req_path}"'
+                    logger.info(f"EnvironmentEngine: Running pip install: {pip_cmd}")
+                    pip_res = subprocess.run(pip_cmd, shell=True, cwd=project_path, capture_output=True, text=True, timeout=300)
+                    if pip_res.returncode == 0:
+                        logger.info(f"EnvironmentEngine: pip install succeeded for {req_path}")
+                        installation_logs.append(f"pip install succeeded for {os.path.basename(req_path)}")
+                        if not installed_pip and missing_pip:
+                            installed_pip.extend(missing_pip)
+                    else:
+                        installation_logs.append(f"pip install notice: {pip_res.stderr[:200]}")
+                        logger.warning(f"EnvironmentEngine: pip install failed for {req_path}: {pip_res.stderr[:300]}")
+                except Exception as pip_err:
+                    logger.warning(f"EnvironmentEngine: pip install exception for {req_path}: {pip_err}")
+
+            # Count pip packages in venv
+            try:
+                freeze_res = subprocess.run(
+                    f'"{py_exe}" -m pip list --format=freeze',
+                    shell=True, cwd=project_path, capture_output=True, text=True, timeout=30
+                )
+                if freeze_res.returncode == 0:
+                    pip_packages_count = len([ln for ln in freeze_res.stdout.strip().splitlines() if ln.strip()])
+            except Exception:
+                pass
+
+        # ── 3. Relative import shim repair ────────────────────────────────────────
         repaired_rel_imports = self.validate_and_repair_relative_imports(project_path)
 
+        all_installed = list(dict.fromkeys(installed_npm + installed_pip))
         return {
             "success": True,
+            "scanned_js_imports": sorted(list(scanned_js_all)),
+            "scanned_python_imports": sorted(list(scanned_py_all)),
+            "installed": all_installed,
             "installed_npm": installed_npm,
             "installed_pip": installed_pip,
-            "repaired_relative_imports": repaired_rel_imports
+            "venv_created": venv_created,
+            "npm_installed": npm_installed,
+            "node_modules_count": node_modules_count,
+            "pip_packages_count": pip_packages_count,
+            "repaired_relative_imports": repaired_rel_imports,
+            "logs": "\n".join(installation_logs) if installation_logs else "All dependencies physically verified and up to date."
         }
 
     def validate_and_repair_relative_imports(self, project_path: str) -> List[str]:
@@ -293,9 +552,51 @@ class EnvironmentEngine:
                             if not any(os.path.exists(c) for c in candidates):
                                 logger.info(f"EnvironmentEngine: Detected missing relative import '{rel_path}' in {source_file_path}")
                                 
-                                # Attempt auto-repair / shim generation
                                 target_dir = os.path.dirname(norm_target_base)
                                 target_file_basename = os.path.basename(norm_target_base)
+
+                                # ── Smart Re-resolution ───────────────────────────────────────
+                                # Check if target file actually exists in same folder or in src/
+                                fixed_rel = None
+                                local_candidates = [
+                                    os.path.join(dir_of_source, target_file_basename + ".ts"),
+                                    os.path.join(dir_of_source, target_file_basename + ".tsx"),
+                                    os.path.join(dir_of_source, target_file_basename + ".js"),
+                                    os.path.join(dir_of_source, target_file_basename + ".jsx"),
+                                ]
+                                src_dir = os.path.join(project_path, "src")
+                                src_candidates = [
+                                    os.path.join(src_dir, target_file_basename + ".ts"),
+                                    os.path.join(src_dir, target_file_basename + ".tsx"),
+                                    os.path.join(src_dir, target_file_basename + ".js"),
+                                    os.path.join(src_dir, target_file_basename + ".jsx"),
+                                ]
+                                if any(os.path.exists(lc) for lc in local_candidates):
+                                    fixed_rel = f"./{target_file_basename}"
+                                elif any(os.path.exists(sc) for sc in src_candidates):
+                                    # Compute relative path from dir_of_source to src/
+                                    matched_sc = next(sc for sc in src_candidates if os.path.exists(sc))
+                                    rel_from_source = os.path.relpath(os.path.splitext(matched_sc)[0], dir_of_source).replace("\\", "/")
+                                    if not rel_from_source.startswith("."):
+                                        rel_from_source = "./" + rel_from_source
+                                    fixed_rel = rel_from_source
+
+                                if fixed_rel:
+                                    # Update source file import statement directly!
+                                    new_content = content.replace(f"'{rel_path}'", f"'{fixed_rel}'").replace(f'"{rel_path}"', f'"{fixed_rel}"')
+                                    with open(source_file_path, "w", encoding="utf-8") as sfh:
+                                        sfh.write(new_content)
+                                    repaired.append(f"Auto-fixed relative import path in {source_file_path}: '{rel_path}' -> '{fixed_rel}'")
+                                    logger.info(f"EnvironmentEngine auto-fixed broken relative import in {source_file_path}: '{rel_path}' -> '{fixed_rel}'")
+                                    continue
+                                # ─────────────────────────────────────────────────────────────
+
+                                # Prevent creating root-level api.tsx/api.ts shims that collide with Vite /api proxy
+                                if os.path.normpath(target_dir) == os.path.normpath(project_path) and target_file_basename.lower() in ("api", "api.ts", "api.tsx"):
+                                    logger.warning(f"EnvironmentEngine: Blocked creation of root shim {norm_target_base} to prevent Vite /api proxy collision.")
+                                    continue
+
+                                # Attempt auto-repair / shim generation
                                 os.makedirs(target_dir, exist_ok=True)
 
                                 # Check if a related component file exists in target_dir
@@ -431,5 +732,114 @@ export default function {target_file_basename}(props: any) {{
             "log": log_msgs,
             "scan_res": scan_res
         }
+
+    def parse_missing_package_from_error(self, error_text: str) -> Dict[str, str]:
+        """
+        Parses stack traces, build logs, and UI alert text for missing Python or Node package names.
+        Returns dict with keys: 'missing' (bool), 'package' (str), 'ecosystem' ('pip' | 'npm').
+        """
+        if not error_text:
+            return {"missing": False, "package": "", "ecosystem": ""}
+
+        text = error_text.strip()
+
+        # Python: ModuleNotFoundError: No module named 'xyz'
+        py_match = re.search(r"ModuleNotFoundError:\s*No module named ['\"]?([a-zA-Z0-9_\-\.]+)", text, re.IGNORECASE)
+        if py_match:
+            mod_name = py_match.group(1).split(".")[0]
+            pypi_name = PYTHON_MODULE_TO_PYPI_NAME.get(mod_name.lower(), mod_name)
+            return {"missing": True, "package": pypi_name, "ecosystem": "pip"}
+
+        # Python: ImportError: cannot import name ... from 'xyz' / No module named 'xyz'
+        py_imp_match = re.search(r"ImportError:.*(?:from|named)\s+['\"]?([a-zA-Z0-9_\-\.]+)", text, re.IGNORECASE)
+        if py_imp_match:
+            mod_name = py_imp_match.group(1).split(".")[0]
+            pypi_name = PYTHON_MODULE_TO_PYPI_NAME.get(mod_name.lower(), mod_name)
+            return {"missing": True, "package": pypi_name, "ecosystem": "pip"}
+
+        # Node/Vite: Failed to resolve import "xyz" from "..."
+        npm_match = re.search(r"Failed to resolve import [\"']([^\"']+)[\"']", text, re.IGNORECASE)
+        if npm_match:
+            pkg_name = npm_match.group(1)
+            if not pkg_name.startswith((".", "/", "@src")):
+                parts = pkg_name.split("/")
+                base_pkg = "/".join(parts[:2]) if pkg_name.startswith("@") and len(parts) >= 2 else parts[0]
+                return {"missing": True, "package": base_pkg, "ecosystem": "npm"}
+
+        # Node: Cannot find module 'xyz'
+        npm_mod_match = re.search(r"Cannot find module [\"']([^\"']+)[\"']", text, re.IGNORECASE)
+        if npm_mod_match:
+            pkg_name = npm_mod_match.group(1)
+            if not pkg_name.startswith((".", "/")):
+                base_pkg = "/".join(pkg_name.split("/")[:2]) if pkg_name.startswith("@") else pkg_name.split("/")[0]
+                return {"missing": True, "package": base_pkg, "ecosystem": "npm"}
+
+        # Flexible natural language / UI alert text patterns
+        nl_match = re.search(r"(?:missing|uninstalled|install|package|module|library)\s+(?:package|module|library|name)?\s*['\"]?([a-zA-Z0-9_\-@\/]+)['\"]?", text, re.IGNORECASE)
+        if nl_match:
+            candidate = nl_match.group(1).strip().strip("'\"")
+            if candidate.lower() not in ("package", "module", "library", "installation", "failed", "enqueued", "missing", "uninstalled", "error"):
+                pypi_name = PYTHON_MODULE_TO_PYPI_NAME.get(candidate.lower(), candidate)
+                if candidate.lower() in PYTHON_MODULE_TO_PYPI_NAME or candidate.lower() in BUILTIN_PYTHON_MODULES:
+                    return {"missing": True, "package": pypi_name, "ecosystem": "pip"}
+                ecosystem = "npm" if ("@" in candidate or "/" in candidate or "-" in candidate or not candidate.isidentifier()) else "pip"
+                return {"missing": True, "package": pypi_name, "ecosystem": ecosystem}
+
+        # Single-word raw package fallback (e.g. "distutils" or "lucide-react")
+        clean_word = text.split()[0].strip().strip("'\"`") if text else ""
+        if clean_word and clean_word.lower() not in ("error", "failed", "unknown"):
+            pypi_name = PYTHON_MODULE_TO_PYPI_NAME.get(clean_word.lower(), clean_word)
+            ecosystem = "pip" if clean_word.lower() in PYTHON_MODULE_TO_PYPI_NAME or clean_word.lower() in BUILTIN_PYTHON_MODULES else ("npm" if ("@" in clean_word or "-" in clean_word) else "pip")
+            return {"missing": True, "package": pypi_name, "ecosystem": ecosystem}
+
+        return {"missing": False, "package": "", "ecosystem": ""}
+
+    def auto_install_missing_package(self, project_path: str, package_name: str, ecosystem: str = "npm") -> Dict[str, Any]:
+        """
+        Installs a single missing Python (pip) or Node (npm) package into the project environment
+        and updates the corresponding manifest file (requirements.txt or package.json).
+        """
+        if not package_name or not os.path.exists(project_path):
+            return {"success": False, "error": f"Invalid project or package: {package_name}"}
+
+        path_security.validate_write_permission(project_path)
+        logger.info(f"EnvironmentEngine: Auto-installing missing {ecosystem} package '{package_name}' in {project_path}...")
+
+        # Translate import name to PyPI name if python
+        if ecosystem == "pip":
+            package_name = PYTHON_MODULE_TO_PYPI_NAME.get(package_name.lower(), package_name)
+            self.setup_python_virtualenv(project_path)
+            execs = self.get_python_venv_executables(project_path)
+            pip_cmd = execs["pip"]
+            cmd = f'{pip_cmd} install "{package_name}"'
+            res = subprocess.run(cmd, shell=True, cwd=project_path, capture_output=True, text=True, timeout=180)
+            success = res.returncode == 0
+            if success:
+                root_req = os.path.join(project_path, "requirements.txt")
+                try:
+                    mode = "a" if os.path.exists(root_req) else "w"
+                    with open(root_req, mode, encoding="utf-8") as f:
+                        f.write(f"\n{package_name}")
+                except Exception as req_err:
+                    logger.warning(f"Could not update requirements.txt during auto-install: {req_err}")
+            return {
+                "success": success,
+                "package": package_name,
+                "ecosystem": "pip",
+                "log": res.stdout[:800] if success else (res.stderr[:800] or res.stdout[:800] or "pip install failed")
+            }
+
+        elif ecosystem == "npm":
+            cmd = f'npm install {package_name} --save'
+            res = subprocess.run(cmd, shell=True, cwd=project_path, capture_output=True, text=True, timeout=180)
+            success = res.returncode == 0
+            return {
+                "success": success,
+                "package": package_name,
+                "ecosystem": "npm",
+                "log": res.stdout[:800] if success else (res.stderr[:800] or res.stdout[:800] or "npm install failed")
+            }
+
+        return {"success": False, "error": f"Unknown ecosystem: {ecosystem}"}
 
 environment_engine = EnvironmentEngine()

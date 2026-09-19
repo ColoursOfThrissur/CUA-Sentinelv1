@@ -22,11 +22,11 @@ interface Props {
 
 export const ProjectWizardModal: React.FC<Props> = ({ onClose, onSuccess }) => {
   const [step, setStep] = useState<number>(1)
-  const [projectName, setProjectName] = useState<string>('Serenity Wellness Spa')
-  const [targetPath, setTargetPath] = useState<string>('D:/Projects/SerenitySpa')
+  const [projectName, setProjectName] = useState<string>('')
+  const [targetPath, setTargetPath] = useState<string>('')
   const [techStack, setTechStack] = useState<string>('FastAPI + React')
   const [uiStyle, setUiStyle] = useState<string>('Glassmorphism')
-  const [description, setDescription] = useState<string>('Autonomous wellness spa booking platform with UI/UX Pro Max design intelligence.')
+  const [description, setDescription] = useState<string>('')
   const [blueprintContent, setBlueprintContent] = useState<string>('')
   const [blueprintFilename, setBlueprintFilename] = useState<string>('')
   const [submitting, setSubmitting] = useState<boolean>(false)

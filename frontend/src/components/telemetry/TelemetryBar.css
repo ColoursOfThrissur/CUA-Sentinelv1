@@ -1,10 +1,47 @@
-.telemetry-bar { display: flex; align-items: center; gap: 8px; }
+.telemetry-bar { 
+  display: inline-flex; 
+  align-items: center; 
+  gap: 4px; 
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
 
-.telemetry-chip { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: var(--r-pill); background: var(--bg-subtle); border: 1px solid var(--bg-subtle-hi); }
-.telemetry-chip.warm { background: rgba(250,204,21,0.08);  border-color: rgba(250,204,21,0.15); }
-.telemetry-chip.hot  { background: rgba(248,113,113,0.08); border-color: rgba(248,113,113,0.2); }
+.telemetry-chip { 
+  display: inline-flex; 
+  align-items: center; 
+  gap: 4px; 
+  padding: 2px 7px; 
+  height: 22px;
+  border-radius: 4px; 
+  background: var(--bg-subtle, rgba(255,255,255,0.03)); 
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06)); 
+  white-space: nowrap;
+}
 
-.telemetry-label { font-size: 0.72rem; color: var(--text-dim); }
-.telemetry-value { font-size: 0.75rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text-muted); }
-.telemetry-value.warm { color: var(--c-yellow); }
-.telemetry-value.hot  { color: var(--c-red); }
+.telemetry-chip.warm { 
+  background: rgba(250,204,21,0.08);  
+  border-color: rgba(250,204,21,0.2); 
+}
+
+.telemetry-chip.hot  { 
+  background: rgba(248,113,113,0.08); 
+  border-color: rgba(248,113,113,0.25); 
+}
+
+.telemetry-label { 
+  font-size: 0.65rem; 
+  font-weight: 700; 
+  text-transform: uppercase; 
+  letter-spacing: 0.03em;
+  color: var(--text-dim, #94a3b8); 
+}
+
+.telemetry-value { 
+  font-size: 0.7rem; 
+  font-weight: 700; 
+  font-variant-numeric: tabular-nums; 
+  color: var(--text-base, #e2e8f0); 
+}
+
+.telemetry-value.warm { color: var(--c-yellow, #facc15); }
+.telemetry-value.hot  { color: var(--c-red, #f87171); }

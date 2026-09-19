@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useSentinelStore } from '../../store'
 import { settingsApi } from '../../api'
@@ -6,6 +7,13 @@ import './SystemStatus.css'
 export default function SystemStatus() {
   const { systemState, wsConnected, telemetry } = useSentinelStore()
   const navigate = useNavigate()
+  const [autoHeal, setAutoHeal] = useState(true)
+
+  useEffect(() => {
+    settingsApi.getPreferences().then(r => {
+      if (r.data?.auto_heal !== undefined) setAutoHeal(r.data.auto_heal)
+    })
+  }, [])
 
   const safeMode      = systemState?.safe_mode === 'true'
   const emergencyStop = systemState?.emergency_stop === 'true'
@@ -37,11 +45,19 @@ export default function SystemStatus() {
           <span className="status-row-label">Connection</span>
           <span className={`pill ${wsConnected ? 'pill-good' : 'pill-danger'}`}>{wsConnected ? 'Live' : 'Reconnecting'}</span>
         </div>
-        <div className="status-row" style={{ cursor: 'pointer' }} onClick={handleToggleSafeMode} title="Click to toggle Safe Mode">
+        <div className="status-row clickable" onClick={handleToggleSafeMode} title="Click to toggle Safe Mode">
           <span className="status-row-label">Safe Mode</span>
-          <span className={`pill ${safeMode ? 'pill-warn' : 'pill-good'}`}>
-            {safeMode ? 'Active (Click to Off)' : 'Off'}
-          </span>
+          <div className={`switch-toggle ${safeMode ? 'active' : ''}`}>
+            <span className="switch-knob" />
+            <span className="switch-text">{safeMode ? 'ON' : 'OFF'}</span>
+          </div>
+        </div>
+        <div className="status-row clickable" onClick={() => { settingsApi.updatePreference('auto_heal', !autoHeal); setAutoHeal(!autoHeal) }} title="Click to toggle Zero-Touch Auto-Healing">
+          <span className="status-row-label" style={{ color: 'var(--c-cyan)' }}>Auto-Heal</span>
+          <div className={`switch-toggle ${autoHeal ? 'active' : ''}`}>
+            <span className="switch-knob" />
+            <span className="switch-text">{autoHeal ? 'ON' : 'OFF'}</span>
+          </div>
         </div>
         {emergencyStop && (
           <div className="status-row">
@@ -53,14 +69,14 @@ export default function SystemStatus() {
 
       {telemetry ? (
         <div className="hw-bars">
-          <HardwareBar label="CPU" pct={telemetry.cpu_percent} color="var(--c-indigo)" />
-          <HardwareBar label="RAM" pct={telemetry.ram_percent} color="var(--c-purple)" />
-          {vramPct !== null && (
+          <HardwareBar label="CPU" pct={telemetry.cpu_percent} color="linear-gradient(90deg, #0284c7, #38bdf8)" />
+          <HardwareBar label="RAM" pct={telemetry.ram_percent} color="linear-gradient(90deg, #6366f1, #818cf8)" />
+          {vramPct !== null && telemetry.vram_used_mb !== null && telemetry.vram_total_mb !== null && (
             <HardwareBar
               label="VRAM"
               pct={vramPct}
-              color={vramPct > 85 ? 'var(--c-red)' : 'var(--c-cyan)'}
-              detail={`${telemetry.vram_used_mb}/${telemetry.vram_total_mb} MB`}
+              color={vramPct > 85 ? 'linear-gradient(90deg, #ef4444, #f87171)' : 'linear-gradient(90deg, #0d9488, #2dd4bf)'}
+              detail={telemetry.vram_total_mb >= 1024 ? `${(telemetry.vram_used_mb / 1024).toFixed(1)} / ${(telemetry.vram_total_mb / 1024).toFixed(0)} GB` : `${telemetry.vram_used_mb}/${telemetry.vram_total_mb} MB`}
             />
           )}
           {telemetry.gpu_temp_c !== null && (

@@ -8,7 +8,7 @@
   "ollama": {
     "base_url": "http://localhost:11434",
     "request_timeout_sec": 300,
-    "keep_alive_background": "0",
+    "keep_alive_background": "15m",
     "keep_alive_endpoint": "15m"
   },
   "api": {
@@ -55,5 +55,14 @@
     "hardware_sample_interval_sec": 10,
     "hourly_rollup_enabled": true,
     "daily_rollup_enabled": true
+  },
+  "auto_remediation": {
+    "enabled": true,
+    "auto_install_missing_libraries": true,
+    "max_attempts_per_incident": 2,
+    "active_session_cooloff_sec": 300,
+    "trigger_on_server_crash": true,
+    "trigger_on_build_failure": true,
+    "trigger_on_ast_vulnerability": true
   }
 }

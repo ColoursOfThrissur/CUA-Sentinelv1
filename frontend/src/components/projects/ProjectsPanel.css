@@ -62,6 +62,12 @@
   padding: 0.5rem 0.75rem;
   border-radius: 8px;
   border: 1px solid var(--border-mid);
+  transition: all 0.2s ease;
+}
+
+.search-input-wrapper:focus-within {
+  border-color: var(--c-cyan);
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.2);
 }
 
 .search-input-wrapper input {

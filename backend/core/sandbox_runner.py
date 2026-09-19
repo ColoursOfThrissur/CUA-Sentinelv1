@@ -21,6 +21,16 @@ class SandboxRunner:
         if not os.path.exists(project_path):
             return {"success": False, "exit_code": -1, "stdout": "", "stderr": "Project directory not found."}
 
+        # Use virtualenv python if available
+        try:
+            from core.environment_engine import environment_engine
+            executables = environment_engine.get_python_venv_executables(project_path)
+            py_exe = executables.get('python', 'python')
+            if command.startswith('python '):
+                command = f'"{py_exe}"' + command[6:]
+        except Exception:
+            pass
+
         try:
             res = subprocess.run(
                 command,
@@ -43,6 +53,14 @@ class SandboxRunner:
             return {"success": False, "exit_code": -2, "stdout": "", "stderr": "Test command timed out after 45s."}
         except Exception as e:
             return {"success": False, "exit_code": -3, "stdout": "", "stderr": str(e)}
+
+    async def execute_test_command_async(self, project_path: str, command: str = None) -> Dict[str, Any]:
+        """
+        Non-blocking async wrapper around execute_test_command.
+        Executes pytest / npm test in a worker thread so the main asyncio event loop is never frozen.
+        """
+        import asyncio
+        return await asyncio.to_thread(self.execute_test_command, project_path, command)
 
     def probe_http_health(self, url: str = "http://localhost:8000/health", timeout_sec: int = 3) -> Tuple[bool, str]:
         """
@@ -86,7 +104,18 @@ class SandboxRunner:
         if not os.path.exists(main_py):
             main_py = os.path.join(project_path, "main.py")
 
-        cmd = f"python {main_py}" if os.path.exists(main_py) else f"python -m http.server {allocated_port}"
+        # Use virtualenv python if available
+        try:
+            from core.environment_engine import environment_engine
+            executables = environment_engine.get_python_venv_executables(project_path)
+            py_exe = executables.get('python', 'python')
+        except Exception:
+            py_exe = 'python'
+
+        if os.path.exists(main_py):
+            cmd = f'"{py_exe}" "{main_py}"'
+        else:
+            cmd = f'python -m http.server {allocated_port}'
 
         try:
             proc = subprocess.Popen(
@@ -96,16 +125,12 @@ class SandboxRunner:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
-            import time
-            time.sleep(1.5)
-            healthy, msg = self.probe_http_health(f"{preview_url}/health", timeout_sec=2)
-
             return {
                 "success": True,
                 "pid": proc.pid,
                 "port": allocated_port,
                 "preview_url": preview_url,
-                "health_status": msg if healthy else f"Server running on port {allocated_port}"
+                "health_status": f"Server launching on port {allocated_port} (PID {proc.pid})"
             }
         except Exception as err:
             return {"success": False, "error": str(err)}

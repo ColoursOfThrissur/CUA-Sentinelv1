@@ -34,6 +34,7 @@ class Scheduler:
         self.poll_interval = config["scheduler"]["poll_interval_sec"]
         self._running = False
         self._current_claim: Optional[TaskClaimResult] = None
+        self._current_exec_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
 
     async def run(self) -> None:
@@ -78,23 +79,18 @@ class Scheduler:
             return
 
         self._current_claim = claim
-        await self._execute_task(claim)
-        self._current_claim = None
+        try:
+            self._current_exec_task = asyncio.create_task(self._execute_task(claim))
+            await self._current_exec_task
+        except asyncio.CancelledError:
+            logger.info(f"Scheduler: Execution of task {claim.task_id} was preempted/cancelled.")
+        finally:
+            self._current_exec_task = None
+            self._current_claim = None
 
     async def _execute_task(self, claim: TaskClaimResult) -> None:
-        from agents.researcher import ResearcherAgent
-        from agents.synthesizer import SynthesizerAgent
-        from agents.endpoint_agent import EndpointAgent
-        from core.router import AgentRegistry, IntentRouter
+        from core.router import IntentRouter
         from api.websocket import broadcast_task_update
-
-        # Ensure core agent capabilities are registered
-        AgentRegistry.register("ENDPOINT", EndpointAgent)
-        AgentRegistry.register("RESEARCHER", ResearcherAgent)
-        AgentRegistry.register("RESEARCH", ResearcherAgent)
-        AgentRegistry.register("SYNTHESIZER", SynthesizerAgent)
-        AgentRegistry.register("FINANCE", EndpointAgent)
-        AgentRegistry.register("BOOKMARK", EndpointAgent)
 
         logger.info(f"Executing task {claim.task_id} type={claim.workflow_type}")
 
@@ -118,6 +114,12 @@ class Scheduler:
             self.queue.release_task(claim.task_id, claim.lease_id, "COMPLETED", result_payload=result)
             await broadcast_task_update(claim.task_id, "COMPLETED", result)
 
+        except asyncio.CancelledError:
+            logger.info(f"Task {claim.task_id} cancelled via preemption. Releasing model lease...")
+            self.model_manager.release_task_lease(claim.task_id)
+            await broadcast_task_update(claim.task_id, "PREEMPTED")
+            raise
+
         except ModelAdmissionError as e:
             logger.error(f"Model admission failed for task {claim.task_id}: {e}")
             self.queue.release_task(claim.task_id, claim.lease_id, "FAILED", error=str(e))
@@ -129,12 +131,23 @@ class Scheduler:
             await broadcast_task_update(claim.task_id, "FAILED")
 
     def request_preemption(self) -> bool:
-        """Called by watchdog when a P0 task arrives and a lower priority task is running."""
+        """
+        Called by watchdog when a higher-priority task arrives and a lower-priority task is running.
+        Transitions the task to PREEMPTED and cancels the running asyncio task.
+        """
         if not self._current_claim:
             return False
         if self._current_claim.priority == 0:
             return False
-        return self.queue.preempt_task(self._current_claim.task_id, self._current_claim.lease_id)
+        
+        task_id = self._current_claim.task_id
+        lease_id = self._current_claim.lease_id
+        preempted = self.queue.preempt_task(task_id, lease_id)
+        if preempted:
+            logger.info(f"Scheduler: Successfully marked task {task_id} as PREEMPTED. Cancelling active execution...")
+            if self._current_exec_task and not self._current_exec_task.done():
+                self._current_exec_task.cancel()
+        return preempted
 
     async def stop(self) -> None:
         self._stop_event.set()

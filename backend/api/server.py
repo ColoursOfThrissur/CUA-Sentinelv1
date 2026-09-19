@@ -24,7 +24,7 @@ def _middleware_smart_iter(self):
 
 Middleware.__iter__ = _middleware_smart_iter
 
-from api.routes import tasks, chat, models, telemetry, hitl, settings, finance, links, notifications, scheduler, digests, gmail_triage, code_refactor, projects
+from api.routes import tasks, chat, models, telemetry, hitl, settings, finance, links, notifications, scheduler, digests, gmail_triage, code_refactor, projects, improvements
 from api.websocket import router as ws_router
 from config.loader import load_system_config
 from api.auth import SentinelAuthMiddleware
@@ -67,6 +67,7 @@ def create_app(lifespan) -> FastAPI:
     app.include_router(gmail_triage.router)
     app.include_router(code_refactor.router, prefix="/api/code-refactor", tags=["code_refactor"])
     app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
+    app.include_router(improvements.router, prefix="/api/improvements", tags=["improvements"])
     app.include_router(ws_router)
 
     @app.get("/health")

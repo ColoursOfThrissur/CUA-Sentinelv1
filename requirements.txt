@@ -1,0 +1,3 @@
+# CUA-Sentinel Primary Requirements
+# Single source of truth is backend/requirements.txt
+-r backend/requirements.txt

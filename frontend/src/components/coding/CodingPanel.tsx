@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   Code2,
   FolderSearch,
@@ -26,7 +26,7 @@ import {
   LayoutDashboard,
   PackageCheck
 } from 'lucide-react'
-import { codeRefactorApi } from '../../api'
+import { codeRefactorApi, projectsApi } from '../../api'
 import ProjectWizardModal from './ProjectWizardModal'
 import './CodingPanel.css'
 
@@ -71,10 +71,10 @@ interface ScanResult {
 import CodeWorkspace from './CodeWorkspace'
 
 const PRESET_DIRECTIVES = [
-  { label: '⚡ AST Cleanup & Types', goal: 'Analyze AST syntax, eliminate unused code, modularize large functions, and enforce TypeScript annotations.' },
-  { label: '🔒 Security Hardening', goal: 'Perform AST security risk audit, sanitize inputs, enforce strict access policies, and patch vulnerabilities.' },
-  { label: '🚀 Performance & Live Charts', goal: 'Optimize rendering bottlenecks, replace static mocks with live chart components, and tune API response speeds.' },
-  { label: '📝 Architecture Spec & Docs', goal: 'Generate full module docstrings, write system architecture overview, and update ARCHITECTURE_SPEC.md.' }
+  { label: 'AST Cleanup & Types', goal: 'Analyze AST syntax, eliminate unused code, modularize large functions, and enforce TypeScript annotations.' },
+  { label: 'Security Hardening', goal: 'Perform AST security risk audit, sanitize inputs, enforce strict access policies, and patch vulnerabilities.' },
+  { label: 'Performance & Live Charts', goal: 'Optimize rendering bottlenecks, replace static mocks with live chart components, and tune API response speeds.' },
+  { label: 'Architecture Spec & Docs', goal: 'Generate full module docstrings, write system architecture overview, and update ARCHITECTURE_SPEC.md.' }
 ]
 
 export const CodingPanel: React.FC = () => {
@@ -82,7 +82,9 @@ export const CodingPanel: React.FC = () => {
   const [refactorViewMode, setRefactorViewMode] = useState<'split' | 'dashboard' | 'editor'>('split')
   const [isSettingsExpanded, setIsSettingsExpanded] = useState<boolean>(true)
   const [showWizardModal, setShowWizardModal] = useState<boolean>(false)
-  const [projectPath, setProjectPath] = useState<string>('G:/Projects/PCResourceObservatory')
+  const [projectPath, setProjectPath] = useState<string>('')
+  const [activeProjectId, setActiveProjectId] = useState<string>('')
+  const [activeProjectName, setActiveProjectName] = useState<string>('')
   const [goalInstruction, setGoalInstruction] = useState<string>('Analyze backend and frontend for refactoring, AST cleanups, and performance improvements.')
   const [blueprintContent, setBlueprintContent] = useState<string>('')
   const [blueprintFilename, setBlueprintFilename] = useState<string>('')
@@ -99,6 +101,30 @@ export const CodingPanel: React.FC = () => {
   const [showResultsDrawer, setShowResultsDrawer] = useState<boolean>(false)
   const [statusMessage, setStatusMessage] = useState<string>('')
   const [createdProjectData, setCreatedProjectData] = useState<any>(null)
+
+  // Auto-resolve registered project from backend on mount
+  useEffect(() => {
+    projectsApi.list().then((res) => {
+      const list = res.data?.projects || []
+      if (list.length > 0) {
+        const normCurrent = (projectPath || '').toLowerCase().replace(/\\/g, '/')
+        const match = list.find((p: any) => p.target_path && p.target_path.toLowerCase().replace(/\\/g, '/') === normCurrent)
+        const chosen = match || list[0]
+        if (chosen) {
+          setActiveProjectId(chosen.project_id)
+          setActiveProjectName(chosen.project_name)
+          setProjectPath(chosen.target_path)
+          if (chosen.active_port) {
+            setPreviewData({
+              preview_url: `http://localhost:${chosen.active_port}`,
+              port: chosen.active_port,
+              health_status: `Running on port ${chosen.active_port}`
+            })
+          }
+        }
+      }
+    }).catch(console.error)
+  }, [])
 
   const handleInstallDeps = async () => {
     if (!projectPath.trim()) return
@@ -255,8 +281,8 @@ export const CodingPanel: React.FC = () => {
       {activeMode === 'workbench' ? (
         <CodeWorkspace
           isInline={true}
-          projectId="proj_78ec255d9e"
-          projectName="PCResourceObservatory"
+          projectId={activeProjectId}
+          projectName={activeProjectName || projectPath.split(/[\/\\]/).pop() || 'Project'}
           targetPath={projectPath}
           activePort={previewData?.port || 8001}
           activeTaskId={activeTaskId || undefined}
@@ -340,7 +366,19 @@ export const CodingPanel: React.FC = () => {
                 </div>
 
                 <div className="coding-input-group">
-                  <label><Sparkles size={15} /> Custom Refactoring Directives & AI Prompts</label>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <label><Sparkles size={15} /> Custom Refactoring Directives & AI Prompts</label>
+                    {goalInstruction && (
+                      <button
+                        className="btn-icon"
+                        onClick={() => setGoalInstruction('')}
+                        style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 4, background: 'none', border: 'none', cursor: 'pointer' }}
+                        title="Clear directive"
+                      >
+                        <X size={12} /> Clear
+                      </button>
+                    )}
+                  </div>
                   <textarea
                     className="coding-input coding-textarea"
                     rows={2}
@@ -397,132 +435,264 @@ export const CodingPanel: React.FC = () => {
             </div>
           </div>
 
-          {/* AST Health & Audit Dashboard Section */}
-          {(refactorViewMode === 'dashboard' || refactorViewMode === 'split') && (
-            scanResult ? (
-              <div className="coding-grid refactor-dashboard-grid">
-                {/* Code Health Score Card */}
-                <div className="coding-card health-score-card">
-                  <div className="health-score-header">
-                    <Activity size={20} className="health-icon" />
-                    <h4>Code Health Index</h4>
-                  </div>
-                  <div className="health-score-gauge">
-                    <div className="score-number">{scanResult.health_assessment.overall_score}</div>
-                    <div className="score-denom">/ 100</div>
-                  </div>
-                  <div className={`verdict-badge verdict-${scanResult.health_assessment.verdict_badge}`}>
-                    <ShieldCheck size={14} /> {scanResult.health_assessment.verdict}
-                  </div>
-
-                  <div className="health-metrics">
-                    <div className="health-metric">
-                      <FileCode size={14} /> <span>Files Scanned:</span> <strong>{scanResult.total_files}</strong>
-                    </div>
-                    <div className="health-metric">
-                      <AlertTriangle size={14} /> <span>AST Code Smells:</span> <strong>{scanResult.health_assessment.total_issues}</strong>
-                    </div>
-                  </div>
-
-                  {scanResult.health_assessment.sample_issues.length > 0 && (
-                    <div className="sample-issues-list">
-                      <label>Detected AST Warnings:</label>
-                      <ul>
-                        {scanResult.health_assessment.sample_issues.map((issue, idx) => (
-                          <li key={idx}><ChevronRight size={12} /> {issue}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-
-                {/* AST Security Risk Audit Card */}
-                {scanResult.security_assessment && (
-                  <div className="coding-card security-score-card">
+          {/* View Mode: Dashboard Only */}
+          {refactorViewMode === 'dashboard' && (
+            <div className="refactor-view-mode-container animate-fade-in">
+              {scanResult ? (
+                <div className="coding-grid refactor-dashboard-grid">
+                  {/* Code Health Score Card */}
+                  <div className="coding-card health-score-card">
                     <div className="health-score-header">
-                      <ShieldAlert size={20} className="health-icon text-warning" />
-                      <h4>AST Security Risk Score</h4>
+                      <Activity size={20} className="health-icon" />
+                      <h4>Code Health Index</h4>
                     </div>
                     <div className="health-score-gauge">
-                      <div className="score-number">{scanResult.security_assessment.security_score}</div>
+                      <div className="score-number">{scanResult.health_assessment.overall_score}</div>
                       <div className="score-denom">/ 100</div>
                     </div>
-                    <div className={`verdict-badge verdict-${scanResult.security_assessment.risk_badge}`}>
-                      <ShieldCheck size={14} /> {scanResult.security_assessment.risk_level}
+                    <div className={`verdict-badge verdict-${scanResult.health_assessment.verdict_badge}`}>
+                      <ShieldCheck size={14} /> {scanResult.health_assessment.verdict}
                     </div>
 
                     <div className="health-metrics">
                       <div className="health-metric">
-                        <AlertTriangle size={14} /> <span>Vulnerabilities:</span> <strong>{scanResult.security_assessment.total_vulnerabilities}</strong>
+                        <FileCode size={14} /> <span>Files Scanned:</span> <strong>{scanResult.total_files}</strong>
+                      </div>
+                      <div className="health-metric">
+                        <AlertTriangle size={14} /> <span>AST Code Smells:</span> <strong>{scanResult.health_assessment.total_issues}</strong>
                       </div>
                     </div>
 
-                    {scanResult.security_assessment.vulnerabilities.length > 0 && (
+                    {scanResult.health_assessment.sample_issues.length > 0 && (
                       <div className="sample-issues-list">
-                        <label>Detected Security Risks:</label>
+                        <label>Detected AST Warnings:</label>
                         <ul>
-                          {scanResult.security_assessment.vulnerabilities.map((vuln, idx) => (
-                            <li key={idx}><ChevronRight size={12} /> <strong>[{vuln.type}]</strong> {vuln.file}:{vuln.line || 1} - {vuln.description}</li>
+                          {scanResult.health_assessment.sample_issues.map((issue, idx) => (
+                            <li key={idx}><ChevronRight size={12} /> {issue}</li>
                           ))}
                         </ul>
                       </div>
                     )}
                   </div>
-                )}
 
-                {/* HITL Feature Recommendations Card */}
-                <div className="coding-card feature-ideas-card">
-                  <div className="ideas-header">
-                    <Sparkles size={20} className="ideas-icon" />
-                    <h4>HITL Feature & Refactor Recommendations</h4>
-                  </div>
-                  <p className="ideas-subtext">Check items to approve before starting autonomous refactor:</p>
+                  {/* AST Security Risk Audit Card */}
+                  {scanResult.security_assessment && (
+                    <div className="coding-card security-score-card">
+                      <div className="health-score-header">
+                        <ShieldAlert size={20} className="health-icon text-warning" />
+                        <h4>AST Security Risk Score</h4>
+                      </div>
+                      <div className="health-score-gauge">
+                        <div className="score-number">{scanResult.security_assessment.security_score}</div>
+                        <div className="score-denom">/ 100</div>
+                      </div>
+                      <div className={`verdict-badge verdict-${scanResult.security_assessment.risk_badge}`}>
+                        <ShieldCheck size={14} /> {scanResult.security_assessment.risk_level}
+                      </div>
 
-                  <div className="ideas-list">
-                    {featureIdeas.map((idea) => (
-                      <div
-                        key={idea.idea_id}
-                        className={`idea-item ${idea.approved ? 'approved' : ''}`}
-                        onClick={() => toggleFeatureApproval(idea.idea_id)}
-                      >
-                        <div className="idea-checkbox">
-                          {idea.approved ? <CheckCircle2 size={18} className="text-success" /> : <div className="unchecked-circle" />}
-                        </div>
-                        <div className="idea-details">
-                          <div className="idea-title">{idea.title}</div>
-                          <div className="idea-desc">{idea.description}</div>
-                          <span className="idea-cat-tag">{idea.category}</span>
+                      <div className="health-metrics">
+                        <div className="health-metric">
+                          <AlertTriangle size={14} /> <span>Vulnerabilities:</span> <strong>{scanResult.security_assessment.total_vulnerabilities}</strong>
                         </div>
                       </div>
-                    ))}
+
+                      {scanResult.security_assessment.vulnerabilities.length > 0 && (
+                        <div className="sample-issues-list">
+                          <label>Detected Security Risks:</label>
+                          <ul>
+                            {scanResult.security_assessment.vulnerabilities.map((vuln, idx) => (
+                              <li key={idx}><ChevronRight size={12} /> <strong>[{vuln.type}]</strong> {vuln.file}:{vuln.line || 1} - {vuln.description}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* HITL Feature Recommendations Card */}
+                  <div className="coding-card feature-ideas-card">
+                    <div className="ideas-header">
+                      <Sparkles size={20} className="ideas-icon" />
+                      <h4>HITL Feature & Refactor Recommendations</h4>
+                    </div>
+                    <p className="ideas-subtext">Check items to approve before starting autonomous refactor:</p>
+
+                    <div className="ideas-list">
+                      {featureIdeas.map((idea) => (
+                        <div
+                          key={idea.idea_id}
+                          className={`idea-item ${idea.approved ? 'approved' : ''}`}
+                          onClick={() => toggleFeatureApproval(idea.idea_id)}
+                        >
+                          <div className="idea-checkbox">
+                            {idea.approved ? <CheckCircle2 size={18} className="text-success" /> : <div className="unchecked-circle" />}
+                          </div>
+                          <div className="idea-details">
+                            <div className="idea-title">{idea.title}</div>
+                            <div className="idea-desc">{idea.description}</div>
+                            <span className="idea-cat-tag">{idea.category}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ) : (
-              <div className="coding-card refactor-scan-placeholder">
-                <FolderSearch size={28} className="text-primary" />
-                <div>
-                  <h4>No Active AST Scan Results</h4>
-                  <p>Click <strong>"Scan Project & AST"</strong> to run AST health score calculation, security audit, and feature recommendation analysis.</p>
+              ) : (
+                <div className="coding-card refactor-scan-placeholder">
+                  <FolderSearch size={28} className="text-primary" />
+                  <div>
+                    <h4>No Active AST Scan Results</h4>
+                    <p>Click <strong>"Scan Project & AST"</strong> to run AST health score calculation, security audit, and feature recommendation analysis.</p>
+                  </div>
+                  <button className="btn btn-primary" onClick={handleScan} disabled={scanning}>
+                    <FolderSearch size={15} /> {scanning ? 'Scanning Repository...' : 'Run AST Scan Now'}
+                  </button>
                 </div>
-                <button className="btn btn-primary" onClick={handleScan} disabled={scanning}>
-                  <FolderSearch size={15} /> {scanning ? 'Scanning Repository...' : 'Run AST Scan Now'}
-                </button>
-              </div>
-            )
+              )}
+            </div>
           )}
 
-          {/* Integrated Interactive Code Editor Workspace */}
-          {(refactorViewMode === 'editor' || refactorViewMode === 'split') && (
-            <div className="refactor-editor-container">
-              <CodeWorkspace
-                isInline={true}
-                projectId="refactor_target"
-                projectName={projectPath.split('/').pop() || projectPath.split('\\').pop() || 'Project'}
-                targetPath={projectPath}
-                activePort={previewData?.port || 8001}
-                activeTaskId={activeTaskId || undefined}
-              />
+          {/* View Mode: Editor Only */}
+          {refactorViewMode === 'editor' && (
+            <div className="refactor-view-mode-container animate-fade-in">
+              <div className="refactor-editor-container">
+                <CodeWorkspace
+                  isInline={true}
+                  projectId={activeProjectId}
+                  projectName={activeProjectName || projectPath.split(/[\/\\]/).pop() || 'Project'}
+                  targetPath={projectPath}
+                  activePort={previewData?.port || 8001}
+                  activeTaskId={activeTaskId || undefined}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* View Mode: Split View (Dashboard + Code Editor) */}
+          {refactorViewMode === 'split' && (
+            <div className="refactor-view-mode-container animate-fade-in">
+              {scanResult ? (
+                <div className="coding-grid refactor-dashboard-grid">
+                  {/* Code Health Score Card */}
+                  <div className="coding-card health-score-card">
+                    <div className="health-score-header">
+                      <Activity size={20} className="health-icon" />
+                      <h4>Code Health Index</h4>
+                    </div>
+                    <div className="health-score-gauge">
+                      <div className="score-number">{scanResult.health_assessment.overall_score}</div>
+                      <div className="score-denom">/ 100</div>
+                    </div>
+                    <div className={`verdict-badge verdict-${scanResult.health_assessment.verdict_badge}`}>
+                      <ShieldCheck size={14} /> {scanResult.health_assessment.verdict}
+                    </div>
+
+                    <div className="health-metrics">
+                      <div className="health-metric">
+                        <FileCode size={14} /> <span>Files Scanned:</span> <strong>{scanResult.total_files}</strong>
+                      </div>
+                      <div className="health-metric">
+                        <AlertTriangle size={14} /> <span>AST Code Smells:</span> <strong>{scanResult.health_assessment.total_issues}</strong>
+                      </div>
+                    </div>
+
+                    {scanResult.health_assessment.sample_issues.length > 0 && (
+                      <div className="sample-issues-list">
+                        <label>Detected AST Warnings:</label>
+                        <ul>
+                          {scanResult.health_assessment.sample_issues.map((issue, idx) => (
+                            <li key={idx}><ChevronRight size={12} /> {issue}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* AST Security Risk Audit Card */}
+                  {scanResult.security_assessment && (
+                    <div className="coding-card security-score-card">
+                      <div className="health-score-header">
+                        <ShieldAlert size={20} className="health-icon text-warning" />
+                        <h4>AST Security Risk Score</h4>
+                      </div>
+                      <div className="health-score-gauge">
+                        <div className="score-number">{scanResult.security_assessment.security_score}</div>
+                        <div className="score-denom">/ 100</div>
+                      </div>
+                      <div className={`verdict-badge verdict-${scanResult.security_assessment.risk_badge}`}>
+                        <ShieldCheck size={14} /> {scanResult.security_assessment.risk_level}
+                      </div>
+
+                      <div className="health-metrics">
+                        <div className="health-metric">
+                          <AlertTriangle size={14} /> <span>Vulnerabilities:</span> <strong>{scanResult.security_assessment.total_vulnerabilities}</strong>
+                        </div>
+                      </div>
+
+                      {scanResult.security_assessment.vulnerabilities.length > 0 && (
+                        <div className="sample-issues-list">
+                          <label>Detected Security Risks:</label>
+                          <ul>
+                            {scanResult.security_assessment.vulnerabilities.map((vuln, idx) => (
+                              <li key={idx}><ChevronRight size={12} /> <strong>[{vuln.type}]</strong> {vuln.file}:{vuln.line || 1} - {vuln.description}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* HITL Feature Recommendations Card */}
+                  <div className="coding-card feature-ideas-card">
+                    <div className="ideas-header">
+                      <Sparkles size={20} className="ideas-icon" />
+                      <h4>HITL Feature & Refactor Recommendations</h4>
+                    </div>
+                    <p className="ideas-subtext">Check items to approve before starting autonomous refactor:</p>
+
+                    <div className="ideas-list">
+                      {featureIdeas.map((idea) => (
+                        <div
+                          key={idea.idea_id}
+                          className={`idea-item ${idea.approved ? 'approved' : ''}`}
+                          onClick={() => toggleFeatureApproval(idea.idea_id)}
+                        >
+                          <div className="idea-checkbox">
+                            {idea.approved ? <CheckCircle2 size={18} className="text-success" /> : <div className="unchecked-circle" />}
+                          </div>
+                          <div className="idea-details">
+                            <div className="idea-title">{idea.title}</div>
+                            <div className="idea-desc">{idea.description}</div>
+                            <span className="idea-cat-tag">{idea.category}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="coding-card refactor-scan-placeholder">
+                  <FolderSearch size={28} className="text-primary" />
+                  <div>
+                    <h4>No Active AST Scan Results</h4>
+                    <p>Click <strong>"Scan Project & AST"</strong> to run AST health score calculation, security audit, and feature recommendation analysis.</p>
+                  </div>
+                  <button className="btn btn-primary" onClick={handleScan} disabled={scanning}>
+                    <FolderSearch size={15} /> {scanning ? 'Scanning Repository...' : 'Run AST Scan Now'}
+                  </button>
+                </div>
+              )}
+
+              <div className="refactor-editor-container">
+                <CodeWorkspace
+                  isInline={true}
+                  projectId={activeProjectId}
+                  projectName={activeProjectName || projectPath.split(/[\/\\]/).pop() || 'Project'}
+                  targetPath={projectPath}
+                  activePort={previewData?.port || 8001}
+                  activeTaskId={activeTaskId || undefined}
+                />
+              </div>
             </div>
           )}
         </div>
@@ -560,6 +730,8 @@ export const CodingPanel: React.FC = () => {
           onClose={() => setShowWizardModal(false)}
           onSuccess={(data) => {
             setCreatedProjectData(data)
+            setBlueprintContent('')
+            setBlueprintFilename('')
             if (data.target_path) {
               setProjectPath(data.target_path)
             }

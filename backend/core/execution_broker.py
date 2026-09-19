@@ -144,4 +144,58 @@ class ExecutionBroker:
         except Exception:
             pass
 
+    def register_subagent_task(
+        self, task_id: str, subtask_type: str, subtask_description: str
+    ) -> str:
+        """
+        Registers a delegated subagent subtask in the in-memory registry.
+        Returns a unique subtask_id. Used to track which sub-tasks
+        (dependency install, security audit, env scan) are delegated to
+        specialized workers vs handled inline. Pillar 6 — Subagent Delegation.
+        """
+        import uuid
+        subtask_id = f"sub_{uuid.uuid4().hex[:8]}"
+        if not hasattr(self, '_subagent_registry'):
+            self._subagent_registry: Dict[str, Any] = {}
+        self._subagent_registry[subtask_id] = {
+            "task_id": task_id,
+            "subtask_id": subtask_id,
+            "subtask_type": subtask_type,
+            "description": subtask_description,
+            "status": "PENDING",
+            "result": None,
+        }
+        logger.info(
+            f"ExecutionBroker: Registered subagent task {subtask_id} ({subtask_type}) for task {task_id}"
+        )
+        return subtask_id
+
+    def complete_subagent_task(
+        self, subtask_id: str, result: Any, success: bool = True
+    ) -> None:
+        """
+        Marks a registered subagent subtask as completed with its result payload.
+        Pillar 6 — Subagent Delegation.
+        """
+        if not hasattr(self, '_subagent_registry'):
+            return
+        if subtask_id in self._subagent_registry:
+            self._subagent_registry[subtask_id]["status"] = "SUCCESS" if success else "FAILED"
+            self._subagent_registry[subtask_id]["result"] = result
+            logger.info(
+                f"ExecutionBroker: Subagent task {subtask_id} marked {'SUCCESS' if success else 'FAILED'}"
+            )
+
+    def get_subagent_summary(self, task_id: str) -> List[Dict[str, Any]]:
+        """
+        Returns all registered subagent subtasks for a given parent task_id.
+        Used for audit logs and UI step traces. Pillar 6 — Subagent Delegation.
+        """
+        if not hasattr(self, '_subagent_registry'):
+            return []
+        return [
+            v for v in self._subagent_registry.values()
+            if v.get("task_id") == task_id
+        ]
+
 execution_broker = ExecutionBroker()

@@ -1,6 +1,22 @@
 {
   "models": [
     {
+      "model_id": "qwen3_14b_q4",
+      "model_name": "Qwen3 14B Q4",
+      "ollama_tag": "qwen3:14b-q4_K_M",
+      "version": "3",
+      "quantization": "Q4_K_M",
+      "context_limit_max": 8192,
+      "vram_mb_estimate": 8400,
+      "ram_mb_estimate": 1536,
+      "num_layers": 48,
+      "num_kv_heads": 8,
+      "head_dim": 128,
+      "capabilities": ["reasoning", "coding", "research", "planning", "synthesis", "chat", "refactoring"],
+      "is_enabled": true,
+      "notes": "Primary universal model for all tasks. Falls back to qwen3_5_9b if VRAM admission fails."
+    },
+    {
       "model_id": "qwen3_5_9b",
       "model_name": "Qwen3.5 9B",
       "ollama_tag": "qwen3.5:9b",
@@ -14,7 +30,7 @@
       "head_dim": 128,
       "capabilities": ["reasoning", "research", "planning", "synthesis", "chat"],
       "is_enabled": true,
-      "notes": "Primary reasoning model. Use for researcher, synthesizer, endpoint chat."
+      "notes": "Primary reasoning model and fallback for 14B."
     },
     {
       "model_id": "qwen2_5_coder_14b",
@@ -30,7 +46,7 @@
       "head_dim": 128,
       "capabilities": ["coding", "scaffolding", "refactoring", "code_review"],
       "is_enabled": true,
-      "notes": "Primary coding model. Requires all other models unloaded. Use for scaffolder, tester, refactor engine."
+      "notes": "Primary coding model."
     },
     {
       "model_id": "qwen3_vl_8b",
@@ -62,7 +78,7 @@
       "head_dim": 128,
       "capabilities": ["coding", "code_review", "quick_fix"],
       "is_enabled": true,
-      "notes": "Lighter coding model. Use for background code reviewer and quick fixes."
+      "notes": "Lighter coding model."
     },
     {
       "model_id": "mistral_7b",
@@ -78,7 +94,7 @@
       "head_dim": 128,
       "capabilities": ["summarization", "synthesis", "digest", "classification"],
       "is_enabled": true,
-      "notes": "Fast summarization and synthesis. Use for industry synthesizer digests."
+      "notes": "Fast summarization and synthesis."
     },
     {
       "model_id": "phi3_latest",
@@ -94,7 +110,7 @@
       "head_dim": 96,
       "capabilities": ["sanitization", "classification", "routing", "quick_check"],
       "is_enabled": true,
-      "notes": "Sanitizer and classifier model. Tiny footprint. Use for web content sanitization and task routing."
+      "notes": "Sanitizer and classifier model."
     },
     {
       "model_id": "llava_7b",
@@ -110,7 +126,7 @@
       "head_dim": 128,
       "capabilities": ["vision", "image_understanding"],
       "is_enabled": true,
-      "notes": "Backup vision model. Use if qwen3-vl is unavailable."
+      "notes": "Backup vision model."
     }
   ],
   "hardware_limits": {
@@ -125,15 +141,15 @@
     "inference_concurrency": 1
   },
   "model_routing": {
-    "RESEARCHER": "qwen3_5_9b",
-    "SYNTHESIZER": "mistral_7b",
-    "ENDPOINT": "qwen3_5_9b",
-    "SCAFFOLDER": "qwen2_5_coder_14b",
-    "TESTER": "qwen2_5_coder_latest",
-    "REVIEWER": "qwen2_5_coder_latest",
-    "REFACTOR": "qwen2_5_coder_14b",
-    "SECOND_BRAIN": "qwen3_5_9b",
-    "SYNTHETIC_DATA": "qwen2_5_coder_latest",
+    "RESEARCHER": "qwen3_14b_q4",
+    "SYNTHESIZER": "qwen3_14b_q4",
+    "ENDPOINT": "qwen3_14b_q4",
+    "SCAFFOLDER": "qwen3_14b_q4",
+    "TESTER": "qwen3_14b_q4",
+    "REVIEWER": "qwen3_14b_q4",
+    "REFACTOR": "qwen3_14b_q4",
+    "SECOND_BRAIN": "qwen3_14b_q4",
+    "SYNTHETIC_DATA": "qwen3_14b_q4",
     "SANITIZER": "phi3_latest",
     "VISION": "qwen3_vl_8b"
   }

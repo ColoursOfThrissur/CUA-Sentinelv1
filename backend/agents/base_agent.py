@@ -69,6 +69,11 @@ class BaseAgent(ABC):
             conn.close()
 
     def update_step_status(self, step_id: str, status: str, output_summary: dict = None) -> None:
+        VALID_STATUSES = {'PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED', 'SKIPPED'}
+        if status not in VALID_STATUSES:
+            logger.warning(f"update_step_status: invalid status '{status}', normalizing to COMPLETED")
+            status = 'COMPLETED' if 'COMPLETED' in status.upper() else 'FAILED'
+
         now = datetime.now(timezone.utc).isoformat()
         conn = get_operational_db()
         try:

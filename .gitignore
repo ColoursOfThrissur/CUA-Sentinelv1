@@ -36,6 +36,9 @@ workspace/
 output/
 tmp/
 temp/
+scratch/
+backend/scratch/
+*.zip
 
 # Project-generated storage
 data/

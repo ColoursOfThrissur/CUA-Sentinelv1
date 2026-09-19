@@ -150,7 +150,7 @@ export default function TaskQueue() {
         const steps = taskStepsCache[t.task_id] || []
 
         return (
-          <div key={t.task_id} className="card card-hover task-card animate-fade-in" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+          <div key={t.task_id} className={`card card-hover task-card status-${t.status} animate-fade-in`} style={{ flexDirection: 'column', alignItems: 'stretch' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }} onClick={() => navigate(`/tasks/${t.task_id}`)}>
               <button
                 className="btn-icon"
@@ -196,24 +196,25 @@ export default function TaskQueue() {
                     {steps.map((s, idx) => {
                       const summary = s.output_summary as Record<string, any> | undefined
                       const files = Array.isArray(summary?.files_written) ? summary.files_written : (Array.isArray(summary?.files_updated) ? summary.files_updated : [])
+                      const summaryStr = summary?.summary ? String(summary.summary) : ''
                       return (
-                        <div key={s.step_id || idx} style={{ background: 'var(--bg-input)', padding: 8, borderRadius: 6, border: '1px solid var(--border-mid)' }}>
+                        <div key={s.step_id || idx} style={{ background: 'var(--bg-input)', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-mid)' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span style={{ fontWeight: 600, color: 'var(--text-base)' }}>
+                            <span style={{ fontWeight: 600, color: 'var(--text-base)', fontSize: '0.78rem' }}>
                               #{idx + 1} {s.description || s.step_type}
                             </span>
                             <span className={`pill ${s.status === 'COMPLETED' ? 'pill-good' : (s.status === 'RUNNING' ? 'pill-warn' : 'pill-danger')}`} style={{ fontSize: '0.65rem', padding: '1px 6px' }}>
                               {s.status}
                             </span>
                           </div>
-                          {summary?.summary && (
-                            <p style={{ margin: '4px 0 0 0', color: 'var(--text-muted)', fontSize: '0.7rem', lineHeight: 1.3 }}>
-                              {String(summary.summary).slice(0, 140)}...
-                            </p>
+                          {summaryStr && (
+                            <div style={{ margin: '6px 0 0 0', color: 'var(--text-muted)', fontSize: '0.7rem', lineHeight: 1.45, whiteSpace: 'pre-line', background: 'rgba(0,0,0,0.15)', padding: '6px 8px', borderRadius: 4, fontFamily: 'monospace' }}>
+                              {summaryStr}
+                            </div>
                           )}
                           {files.length > 0 && (
-                            <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 4, color: 'var(--c-green)', fontSize: '0.68rem' }}>
-                              <FileCode size={10} /> Updated: <code>{files.slice(0, 2).join(', ')}</code>
+                            <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 4, color: '#10b981', fontSize: '0.68rem', fontWeight: 600 }}>
+                              <FileCode size={11} /> Synthesized: <code>{files.join(', ')}</code>
                             </div>
                           )}
                         </div>

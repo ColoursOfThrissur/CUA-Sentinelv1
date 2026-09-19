@@ -138,4 +138,152 @@ class MemoryLayersManager:
         finally:
             conn.close()
 
+    # ------------------------------------------------------------------
+    # Pillar 4: Context Compactor
+    # ------------------------------------------------------------------
+
+    def compact_conversation_history(
+        self, history: List[Dict[str, Any]], max_chars: int = 16000
+    ) -> List[Dict[str, Any]]:
+        """
+        Prevents context overflow for long coding sessions by compacting older
+        messages while preserving the last 4 messages intact.
+
+        Strategy:
+        - If total chars <= max_chars, return unchanged.
+        - Otherwise, compact messages from index 0 to len-4:
+            * user messages > 500 chars → truncate to 300 + ellipsis
+            * assistant messages with tool_calls → replace with 1-line summary
+            * assistant messages > 800 chars → truncate to 500 + ellipsis
+            * tool / tool_result messages → replace with compact placeholder
+        - Prepend a synthetic system notice at index 0.
+        """
+        if not history:
+            return history
+
+        # ── Total char count ──────────────────────────────────────────
+        total_chars = sum(len(msg.get("content", "")) for msg in history)
+        if total_chars <= max_chars:
+            return history
+
+        # ── Split: compactable portion vs. tail to keep intact ────────
+        keep_tail = 4
+        if len(history) <= keep_tail:
+            # All messages are in the "keep" window; nothing to compact.
+            return history
+
+        compactable = list(history[: len(history) - keep_tail])
+        tail = list(history[len(history) - keep_tail :])
+
+        # ── Compact each eligible message ─────────────────────────────
+        compacted: List[Dict[str, Any]] = []
+        for msg in compactable:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            tool_calls = msg.get("tool_calls", [])
+
+            new_msg = dict(msg)  # shallow copy so we don't mutate the original
+
+            if role == "user":
+                if len(content) > 500:
+                    original_length = len(content)
+                    new_msg["content"] = (
+                        content[:300]
+                        + f" ... [compacted — {original_length} chars]"
+                    )
+
+            elif role == "assistant":
+                if tool_calls:
+                    # Summarise tool calls instead of preserving full content
+                    names = ", ".join(
+                        tc.get("name", "unknown") for tc in tool_calls[:5]
+                    )
+                    new_msg["content"] = (
+                        f"[Tool calls: {names} — compacted]"
+                    )
+                elif len(content) > 800:
+                    new_msg["content"] = content[:500] + " ... [compacted]"
+
+            elif role in ("tool", "tool_result", "function"):
+                # Tool result messages can be very large; always compact them
+                if content:
+                    new_msg["content"] = (
+                        f"[Tool result compacted — {len(content)} chars]"
+                    )
+
+            compacted.append(new_msg)
+
+        # ── Prepend synthetic compaction notice ───────────────────────
+        compaction_notice: Dict[str, Any] = {
+            "role": "system",
+            "content": (
+                "[Context Compacted] Earlier conversation has been summarized "
+                "to stay within token limits. Recent messages below are complete."
+            ),
+        }
+
+        result = [compaction_notice] + compacted + tail
+
+        logger.info(
+            f"Context compacted: {total_chars} chars → "
+            f"{sum(len(m.get('content', '')) for m in result)} chars "
+            f"({len(history)} msgs → {len(result)} msgs)"
+        )
+
+        return result
+
+    def get_recent_autonomous_activity_summary(self, hours: int = 24) -> str:
+        """
+        Gathers recent background autonomous actions from project_health_daemon_logs
+        and improvement_proposals (past 24h) and formats a short digest for LLM system prompt context.
+        """
+        from datetime import datetime, timezone, timedelta
+        from db.connections import get_operational_db
+
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        lines = []
+
+        conn = get_operational_db()
+        try:
+            # 1. Health Daemon Actions
+            cur = conn.execute(
+                """
+                SELECT project_name, action_taken, pre_health, post_health, created_at
+                FROM project_health_daemon_logs
+                WHERE created_at >= ?
+                ORDER BY created_at DESC LIMIT 5
+                """,
+                (cutoff,)
+            )
+            for r in cur.fetchall():
+                pname = r["project_name"]
+                action = r["action_taken"]
+                if action == "AUTO_REPAIRED":
+                    lines.append(f"• Health Auto-Repair: Repaired '{pname}', health improved from {r['pre_health']} to {r['post_health']}.")
+                elif action == "ROLLED_BACK":
+                    lines.append(f"• Health Daemon: Auto-repair for '{pname}' failed verification and was safely rolled back to snapshot.")
+
+            # 2. Improvement Proposals
+            cur_p = conn.execute(
+                """
+                SELECT project_name, title, status, risk_level, created_at
+                FROM improvement_proposals
+                WHERE created_at >= ?
+                ORDER BY created_at DESC LIMIT 5
+                """,
+                (cutoff,)
+            )
+            for r in cur_p.fetchall():
+                lines.append(f"• Improvement Scout: Drafted '{r['title']}' for {r['project_name']} (Status: {r['status']}, Risk: {r['risk_level']}).")
+
+        except Exception as e:
+            logger.debug(f"Error querying recent autonomous activity: {e}")
+        finally:
+            conn.close()
+
+        if not lines:
+            return ""
+
+        return "[RECENT AUTONOMOUS BACKGROUND ACTIVITY (Past 24 Hours)]\n" + "\n".join(lines)
+
 memory_layers = MemoryLayersManager()

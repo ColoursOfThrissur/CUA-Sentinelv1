@@ -104,7 +104,7 @@ export default function LinksPanel() {
         )}
 
         {links.map((link) => (
-          <div key={link.link_id} className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div key={link.link_id} className="card card-hover" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

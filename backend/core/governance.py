@@ -68,6 +68,33 @@ class GovernanceEngine:
 
         conn = get_operational_db()
         try:
+            op_id = str(uuid.uuid4())
+            step_id = str(uuid.uuid4())
+            
+            # Ensure step exists for this task
+            step_row = conn.execute("SELECT step_id FROM task_steps WHERE task_id = ?", (task_id,)).fetchone()
+            if step_row:
+                step_id = step_row["step_id"]
+            else:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO task_steps (step_id, task_id, step_order, step_type, description, status)
+                    VALUES (?, ?, 0, 'HITL_GATE', 'HITL Evaluation', 'PENDING')
+                    """,
+                    (step_id, task_id)
+                )
+
+            # Ensure operation record exists
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO operations (
+                    operation_id, task_id, step_id, tool_name,
+                    target_resource_canonical, recovery_strategy, current_state
+                ) VALUES (?, ?, ?, ?, ?, 'HITL', 'PREPARED')
+                """,
+                (op_id, task_id, step_id, tool_name, f"tool://{tool_name}")
+            )
+
             conn.execute(
                 """
                 INSERT INTO hitl_pending (
@@ -78,7 +105,7 @@ class GovernanceEngine:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)
                 """,
                 (
-                    approval_id, task_id, str(uuid.uuid4()),
+                    approval_id, task_id, op_id,
                     int(tool_policy["risk_level"][1]),
                     f"Tool execution: {tool_name}",
                     json.dumps({"tool": tool_name}),

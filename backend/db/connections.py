@@ -50,6 +50,7 @@ def initialize_all_databases() -> None:
         (OPERATIONAL_DB, MIGRATIONS_DIR / "operational_v1.sql"),
         (OPERATIONAL_DB, MIGRATIONS_DIR / "features_v1.sql"),
         (OPERATIONAL_DB, MIGRATIONS_DIR / "projects_v1.sql"),
+        (OPERATIONAL_DB, MIGRATIONS_DIR / "improvements_v1.sql"),
         (AUDIT_DB, MIGRATIONS_DIR / "audit_v1.sql"),
         (KNOWLEDGE_DB, MIGRATIONS_DIR / "knowledge_v1.sql"),
     ]
