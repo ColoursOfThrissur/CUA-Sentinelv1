@@ -1,0 +1,42 @@
+version: "3.9"
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: sentinel-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=15m
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  sentinel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sentinel-app
+    ports:
+      - "8000:8000"
+    environment:
+      - SENTINEL_API_TOKEN=${SENTINEL_API_TOKEN:-8684}
+      - SENTINEL_JWT_SECRET=${SENTINEL_JWT_SECRET:-8684}
+      - OLLAMA_BASE_URL=http://ollama:11434
+    volumes:
+      - ./data:/app/data
+      - ./workspace:/app/workspace
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+volumes:
+  ollama_models:
+    name: sentinel_ollama_models

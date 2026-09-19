@@ -33,6 +33,8 @@ export const ProjectWizardModal: React.FC<Props> = ({ onClose, onSuccess }) => {
   const [errorMessage, setErrorMessage] = useState<string>('')
 
   const isCPath = targetPath.toLowerCase().startsWith('c:')
+  const isSafeCPath = targetPath.toLowerCase().includes('projects') || targetPath.toLowerCase().includes('workspace')
+  const isRestrictedCPath = isCPath && !isSafeCPath
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -47,11 +49,11 @@ export const ProjectWizardModal: React.FC<Props> = ({ onClose, onSuccess }) => {
 
   const handleNext = () => {
     if (step === 1 && (!projectName.trim() || !targetPath.trim())) {
-      setErrorMessage('Please provide a valid project name and D:\\ target folder path.')
+      setErrorMessage('Please provide a valid project name and target folder path.')
       return
     }
-    if (step === 1 && isCPath) {
-      setErrorMessage('SECURITY BLOCK: Writing to C:\\ OS drive is prohibited. Please specify a path on D:\\ drive (e.g. D:\\Projects\\...).')
+    if (step === 1 && isRestrictedCPath) {
+      setErrorMessage('SECURITY BLOCK: Writing to root C:\\ drive is restricted. Please specify a dedicated folder (e.g. C:\\Projects\\... or D:\\...).')
       return
     }
     setErrorMessage('')
@@ -136,21 +138,21 @@ export const ProjectWizardModal: React.FC<Props> = ({ onClose, onSuccess }) => {
               </div>
 
               <div className="wizard-field">
-                <label>Target Directory Path (Must be on D:\ Drive)</label>
+                <label>Target Directory Path (e.g. D:/Projects/... or C:/Projects/...)</label>
                 <input
                   type="text"
-                  className={`wizard-input ${isCPath ? 'input-error' : ''}`}
+                  className={`wizard-input ${isRestrictedCPath ? 'input-error' : ''}`}
                   value={targetPath}
                   onChange={(e) => setTargetPath(e.target.value)}
-                  placeholder="e.g. D:/Projects/SerenitySpa"
+                  placeholder="e.g. D:/Projects/MyApp or C:/Projects/MyApp"
                 />
-                {isCPath ? (
+                {isRestrictedCPath ? (
                   <span className="field-hint hint-danger">
-                    <AlertTriangle size={12} /> C:\ drive writes are blocked to protect operating system files. Use D:\ drive.
+                    <AlertTriangle size={12} /> Root C:\ drive writes are restricted to protect OS files. Please use C:\Projects\... or D:\.
                   </span>
                 ) : (
                   <span className="field-hint hint-success">
-                    <ShieldCheck size={12} /> D:\ drive write access granted.
+                    <ShieldCheck size={12} /> Target path authorized for project generation.
                   </span>
                 )}
               </div>

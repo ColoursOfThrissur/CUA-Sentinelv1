@@ -43,7 +43,9 @@
     "tmpfs_max_mb": 512,
     "janitor_run_day": "sunday",
     "janitor_run_hour": 3,
-    "sandbox_ttl_days": 7
+    "sandbox_ttl_days": 7,
+    "allowed_drives": ["C:", "D:", "E:", "F:", "G:"],
+    "allowed_project_roots": ["projects", "workspace", "cua-sentinel"]
   },
   "web_push": {
     "enabled": false,

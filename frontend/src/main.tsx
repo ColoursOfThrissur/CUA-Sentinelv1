@@ -3,8 +3,8 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import './index.css'
 
-// Force unregister stale service workers on every load
-if ('serviceWorker' in navigator) {
+// Clear stale service workers during local development to prevent caching conflicts; allow PWA in production
+if (import.meta.env.DEV && 'serviceWorker' in navigator) {
   navigator.serviceWorker.getRegistrations().then((regs) => {
     regs.forEach((r) => r.unregister())
   })

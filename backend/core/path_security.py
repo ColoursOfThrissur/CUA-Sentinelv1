@@ -2,9 +2,9 @@ r"""
 Drive Path Security Guardrail Module for CUA-Sentinel.
 
 Enforces OS protection rules:
-- Strictly BLOCKS write/edit/delete operations on C:\ (OS System Drive).
-- PERMITS read-only inspection on C:\ for runtime package verifications.
-- GRANTS full read/write/edit permissions on D:\ and G:\ storage drives.
+- Strictly BLOCKS write/edit/delete operations on critical OS directories (Windows, Program Files, System32).
+- PERMITS read-only inspection for runtime package and environment verifications.
+- GRANTS full read/write/edit permissions on designated project storage paths.
 - Enforces Path Canonicalization (Path.resolve()) to prevent relative path escapes (../).
 - Blocks writes to critical protected system/meta files (.git, .env, *.sqlite).
 """
@@ -12,21 +12,35 @@ Enforces OS protection rules:
 import os
 import logging
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 
 logger = logging.getLogger(__name__)
 
+
 class PathSecurityViolation(Exception):
     pass
+
 
 PROTECTED_EXCLUSION_NAMES = {
     ".git", ".sentinel_backup",
     "operational.sqlite", "audit.sqlite", "projects.sqlite", "knowledge.sqlite", "features.sqlite"
 }
 
+CRITICAL_SYSTEM_DIRS = {
+    "windows", "system32", "syswow64", "program files", "program files (x86)",
+    "programdata", "recovery", "boot", "$recycle.bin"
+}
+
+
 class PathSecurityGuardrail:
-    def __init__(self, allowed_drives: Tuple[str, ...] = ("D:", "E:", "F:", "G:")):
+    def __init__(self, allowed_drives: Optional[List[str]] = None, allowed_project_roots: Optional[List[str]] = None):
+        if allowed_drives is None:
+            allowed_drives = ["C:", "D:", "E:", "F:", "G:"]
         self.allowed_drives = [d.upper() for d in allowed_drives]
+
+        if allowed_project_roots is None:
+            allowed_project_roots = ["projects", "workspace", "cua-sentinel", "temp", ".gemini\\antigravity"]
+        self.allowed_project_roots = [r.lower() for r in allowed_project_roots]
 
     def canonicalize_path(self, target_path: str, root_boundary: Optional[str] = None) -> str:
         r"""
@@ -43,8 +57,11 @@ class PathSecurityGuardrail:
 
         # Protect critical system files / folders
         for part in resolved_target.parts:
-            if part.lower() in PROTECTED_EXCLUSION_NAMES:
+            low_part = part.lower()
+            if low_part in PROTECTED_EXCLUSION_NAMES:
                 raise PathSecurityViolation(f"Path Security Violation: Cannot mutate protected asset '{part}' in '{resolved_target}'")
+            if low_part in CRITICAL_SYSTEM_DIRS:
+                raise PathSecurityViolation(f"Path Security Violation: Cannot mutate critical OS system directory '{part}' in '{resolved_target}'")
 
         if root_boundary:
             try:
@@ -60,20 +77,27 @@ class PathSecurityGuardrail:
     def validate_write_permission(self, target_path: str, root_boundary: Optional[str] = None) -> bool:
         r"""
         Validates whether target_path is allowed for write/edit/delete operations.
-        Raises PathSecurityViolation if target_path is on C:\ drive or unsafe locations.
+        Blocks root OS directories and enforces safe project locations.
         """
         norm_path = self.canonicalize_path(target_path, root_boundary=root_boundary)
         drive_letter = os.path.splitdrive(norm_path)[0].upper()
+        low_path = norm_path.lower()
 
-        # Hard write ban on C:\ OS Drive (unless inside project workspace or brain artifact/temp scratch dir)
+        # Check for critical system directories regardless of drive
+        for part in Path(norm_path).parts:
+            if part.lower() in CRITICAL_SYSTEM_DIRS:
+                raise PathSecurityViolation(f"SECURITY BLOCK: Cannot mutate OS system directory: '{norm_path}'")
+
+        # C:\ OS Drive: Allowed inside safe user project roots
         if drive_letter == "C:":
-            low_path = norm_path.lower()
-            if ".gemini\\antigravity" in low_path or "temp" in low_path or "cua-sentinel" in low_path or "projects" in low_path:
+            is_safe_project = any(root in low_path for root in self.allowed_project_roots)
+            if is_safe_project:
                 return True
-            logger.error(f"PathSecurityViolation: Write operation blocked on OS drive path: {norm_path}")
+
+            logger.error(f"PathSecurityViolation: Write operation blocked on OS drive root path: {norm_path}")
             raise PathSecurityViolation(
-                f"SECURITY BLOCK: File write operation blocked on C:\\ OS drive path: '{norm_path}'. "
-                "Projects must be created or refactored on D:\\ or G:\\ storage drives."
+                f"SECURITY BLOCK: File write operation blocked on C:\\ system path: '{norm_path}'. "
+                "Projects on C:\\ must be located inside a 'Projects' or 'workspace' directory."
             )
 
         if drive_letter in self.allowed_drives:
@@ -84,5 +108,5 @@ class PathSecurityGuardrail:
     def validate_read_permission(self, target_path: str) -> bool:
         return True
 
-path_security = PathSecurityGuardrail()
 
+path_security = PathSecurityGuardrail()
