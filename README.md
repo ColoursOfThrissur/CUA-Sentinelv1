@@ -19,8 +19,8 @@
 </p>
 
 <p align="center">
-  A fully local, privacy-first AI command center that runs 8 LLM models on your own hardware.<br/>
-  One-click launch. No cloud dependencies. No API keys required.
+  A local-first AI command center for Windows, powered by a configurable Ollama model registry.<br/>
+  One-click launch, local data storage, and explicit governance for higher-risk actions.
 </p>
 
 ---
@@ -38,58 +38,61 @@
 - [API Reference](#-api-reference)
 - [Model Registry](#-model-registry)
 - [Governance & Safety](#-governance--safety)
+- [Architecture Hardening Plan](#-architecture-hardening-plan)
 - [License](#-license)
 
 ---
 
 ## 🏗 Architecture
 
-CUA-Sentinel follows a **3-tier architecture** with all inference running locally on your GPU:
+CUA-Sentinel operates on a single-machine, local-first architecture where all inference runs on your local GPU via Ollama, and state is preserved across four WAL-enabled SQLite databases:
 
+```mermaid
+%%{init: {'theme': 'neutral', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'ui-sans-serif, system-ui, sans-serif' }}}%%
+flowchart TD
+    Client["🖥️ Frontend: React 18 + Vite Dashboard\n(Zustand Global Store · Typed Axios Client · WebSocket Telemetry)"]
+    Gateway["⚙️ FastAPI Gateway Layer (Port 8000)\n(SentinelAuth · Correlation Middleware · /health/ready · OpenAPI 3.1)"]
+    Orchestration["🧩 Agent Orchestration Boundary\n(AgentRuntime · ToolGateway · GovernanceEngine · Priority Queue)"]
+    Services["🔄 Managed Background Services\n(TaskScheduler · Watchdog & Safe Mode · Telemetry · Pruning)"]
+    Tooling["🛠️ Local Tooling & Execution Engine\n(ProjectWriteService · ProjectEnvironmentService · DependencyChangeExecutor)"]
+    Storage["💾 Persistence Tier (WAL Mode & Bounded Retries)\n(operational.sqlite · audit.sqlite · knowledge.sqlite · state.sqlite)"]
+    Inference["🧠 Local Model Runtime (Port 11434)\n(ModelManager · VRAM Admission · Ollama Native Server · Qwen3 14B Q4)"]
+
+    Client -->|HTTP & WebSockets| Gateway
+    Gateway --> Orchestration
+    Gateway --> Services
+    Orchestration --> Tooling
+    Orchestration --> Storage
+    Services --> Storage
+    Orchestration -->|Streaming Inference| Inference
+    Tooling --> Storage
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    🖥️  React Dashboard (:5173)                  │
-│          Vite · TypeScript · Tailwind · Zustand · Recharts      │
-│            WebSocket real-time · 13 component modules           │
-├─────────────────────────────────────────────────────────────────┤
-│                                 ▲ REST + WebSocket              │
-│                                 ▼                               │
-├─────────────────────────────────────────────────────────────────┤
-│                   ⚙️  FastAPI Backend (:8000)                    │
-│    8 Agents · 38 Core Modules · 15 API Routes · 8 Tools        │
-│  Task Queue · Scheduler · Watchdog · Governance · Discord Bot   │
-├─────────────────────────────────────────────────────────────────┤
-│                                 ▲ HTTP (:11434)                 │
-│                                 ▼                               │
-├─────────────────────────────────────────────────────────────────┤
-│                     🧠  Ollama LLM Runtime                      │
-│       8 Models · VRAM Admission Control · Hot-Swap Loading      │
-│             RTX 3060 12GB · Q4_K_M Quantization                 │
-├─────────────────────────────────────────────────────────────────┤
-│                        💾  Storage Layer                         │
-│    3× SQLite (operational · audit · knowledge) · ChromaDB       │
-└─────────────────────────────────────────────────────────────────┘
-```
+
+> 📖 **Deep Dive Documentation**:
+> - [Complete Architecture Blueprints](docs/ARCHITECTURE_BLUEPRINTS.md) — Main system blueprint and submodules (Agent Runtime, Tool Gateway, Dependency Governance, Database Persistence).
+> - [Database Persistence Design](docs/DATABASE_PERSISTENCE_DESIGN.md) — Table ownership matrix, retry/backoff policies, pre-migration backups, and zero-direct-SQL rules.
+> - [Production Release Checklist](docs/RELEASE_CHECKLIST.md) — Pre-release verification gates, rollback instructions, and security audit checklists.
+> - [Scaling Decision Record](docs/SCALING_DECISION_RECORD.md) — Single-process architecture evaluation under concurrent load.
+
 
 ---
 
 ## ✨ Features
 
-### 💬 Conversational AI
-- Multi-turn chat with web search integration and research synthesis
-- Intent classification routes to specialized agents automatically
-- Conversation memory with persistent session context
+### 💬 Conversational AI and Research
+- Multi-turn chat with web-search integration, persistent context, and specialized routing
+- Research reports and claim records with source metadata
+- Declarative agent profiles, sealed prompt envelopes, checkpoints, and golden evaluations
 
-### 🔧 Autonomous Code Refactoring & Scaffolding
-- AST-based code analysis with security auditing
-- Full project scaffolding from natural language descriptions
-- Automated code health evaluation, diff engine, and alignment validation
-- Multi-agent pipeline: Scaffolder → Tester → Reviewer → Refactor
+### 🔧 Governed Code Refactoring & Scaffolding
+- AST-based analysis, security auditing, code health, and alignment validation
+- Project scaffolding, project workspace controls, backup/rollback, and verification gates
+- Generated-file writes are constrained by path security and policy checks
 
-### 📝 In-Browser IDE (Canvas)
-- File tree explorer with full read/write access
-- Integrated code editor with syntax awareness
-- Alignment validation against project conventions
+### 📝 Project Workspace
+- Project explorer, file read/write tools, terminal output, and preview controls
+- In-browser editing and project-specific prompt workflows
+- Alignment validation against configured project conventions
 
 ### 💰 Personal Finance Portfolio
 - Import holdings from Excel/CSV files
@@ -107,21 +110,23 @@ CUA-Sentinel follows a **3-tier architecture** with all inference running locall
 - ChromaDB vector store for semantic similarity search
 - Retrieval-augmented generation for contextual recall
 
-### 🤖 Discord Bot Remote Control
+### 🤖 Integrations and Remote Control
 - 2-way Discord bot for remote command execution
 - Commands: `!price`, `!health`, `!refactor`, `!task`, and more
 - User-scoped access control with allowed user ID filtering
+- MCP app connections for approved tools such as Blender
 
 ### 📊 Hardware Telemetry Dashboard
 - Real-time CPU, RAM, GPU temperature, and VRAM monitoring
 - WebSocket-powered live telemetry stream (10s sample interval)
 - Hourly and daily rollup aggregation for trend analysis
 
-### 🛡️ Human-in-the-Loop Governance
+### 🛡️ Governance and Safety
 - **L0 – Read Only**: File reads, web search, DB queries (auto-approved)
 - **L1 – Local Write**: Sandbox file creation (auto-approved, logged)
-- **L2 – Project Mutation**: Git commits, package installs (auto-approved, logged, notified)
+- **L2 – Project Mutation**: Controlled project changes (logged and notified)
 - **L3 – Destructive/External**: Git push, deploys, deletions (requires human approval)
+- Tool registry, agent profiles, taint handling, write gates, and an audit trail
 
 ### ⚡ Task Queue & Scheduling
 - Priority-based preemptive task scheduling
@@ -143,7 +148,11 @@ CUA-Sentinel follows a **3-tier architecture** with all inference running locall
 | **Windows** | 10/11 | Primary supported platform |
 | **Git** | 2.40+ | For project management features |
 
-### Pull Required Ollama Models
+### Pull the Models Configured for Your Installation
+
+The default registry currently references the following tags. Pull only the
+models you plan to enable, then adjust `backend/config/models_registry.json` for
+your hardware.
 
 ```bash
 ollama pull qwen3:14b-q4_K_M
@@ -256,10 +265,10 @@ Core system settings including API host/port, scheduler tuning, storage limits, 
 | `watchdog` | `heartbeat_check_interval_sec` (30), `circuit_breaker_cooldown_sec` (600) |
 | `storage` | `max_workspace_size_mb` (2048), `sandbox_ttl_days` (7) |
 | `telemetry` | `hardware_sample_interval_sec` (10), hourly/daily rollups |
-| `auto_remediation` | Auto-install missing libs, trigger on crashes/build failures/AST vulnerabilities |
+| `auto_remediation` | Recovery policy for crashes, build failures, and AST vulnerabilities |
 
 ### `models_registry.json`
-Defines all 8 LLM models with VRAM budgets, capabilities, and agent routing.
+Defines the local model registry, including VRAM budgets, capabilities, and agent routing.
 
 | Model | Tag | VRAM | Role |
 |---|---|---|---|
@@ -309,14 +318,13 @@ Governance rules with L0–L3 risk tiers, tool-level policies, retry strategies,
 | React | 18.3 | UI framework |
 | TypeScript | 5.6 | Type-safe development |
 | Vite | 5.4 | Build tool & dev server |
-| Tailwind CSS | 3.4 | Utility-first styling |
 | Zustand | 5.0 | State management |
-| Recharts | 2.12 | Data visualization & charts |
 | React Router | 6.26 | Client-side routing |
 | Axios | 1.7 | HTTP client |
 | Lucide React | 0.447 | Icon library |
 | React Markdown | 9.0 | Markdown rendering |
 | Vite PWA | 0.20 | Progressive Web App support |
+| Vitest | 2.1 | Frontend test runner |
 
 ### Infrastructure
 
@@ -350,7 +358,7 @@ CUA-Sentinel/
 │   │
 │   ├── 📂 config/
 │   │   ├── system_config.json     # System, API, scheduler, watchdog settings
-│   │   ├── models_registry.json   # 8 LLM models + VRAM budgets + routing
+│   │   ├── models_registry.json   # Local model registry, VRAM budgets, and routing
 │   │   ├── policy_rules.json      # L0–L3 governance + retry policies
 │   │   └── loader.py              # Config file loader
 │   │
@@ -364,7 +372,7 @@ CUA-Sentinel/
 │   │   ├── project_repair_agent.py# Automated project repair
 │   │   └── research_cycle_agent.py# Multi-step research orchestration
 │   │
-│   ├── 📂 core/                   # 38 core modules
+│   ├── 📂 core/                   # Runtime, governance, persistence, and integration services
 │   │   ├── model_manager.py       # VRAM-aware model loading & hot-swap
 │   │   ├── queue.py               # Priority task queue with preemption
 │   │   ├── scheduler.py           # Task scheduler with aging boost
@@ -395,7 +403,7 @@ CUA-Sentinel/
 │   │   ├── server.py              # FastAPI app factory + middleware
 │   │   ├── auth.py                # Token authentication
 │   │   ├── websocket.py           # WebSocket telemetry broadcast
-│   │   └── 📂 routes/             # 15 API route modules
+│   │   └── 📂 routes/             # API route modules
 │   │       ├── chat.py            # Conversation endpoints
 │   │       ├── tasks.py           # Task CRUD & execution
 │   │       ├── projects.py        # Project management
@@ -421,7 +429,6 @@ CUA-Sentinel/
 ├── 📂 frontend/
 │   ├── package.json               # Node.js dependencies
 │   ├── vite.config.ts             # Vite build configuration
-│   ├── tailwind.config.js         # Tailwind CSS configuration
 │   ├── tsconfig.json              # TypeScript configuration
 │   │
 │   └── 📂 src/
@@ -436,7 +443,7 @@ CUA-Sentinel/
 │       │   ├── TaskDetail.tsx     # Task detail & execution view
 │       │   └── Settings.tsx       # System settings page
 │       │
-│       ├── 📂 components/         # 13 component modules
+│       ├── 📂 components/         # Feature and shared UI components
 │       │   ├── 📂 chat/           # Conversational AI interface
 │       │   ├── 📂 canvas/         # In-browser IDE
 │       │   ├── 📂 coding/         # Code refactoring UI
@@ -466,7 +473,7 @@ CUA-Sentinel/
 
 ## 🔌 API Reference
 
-The backend exposes **15 route modules** at `http://localhost:8000`:
+The backend exposes route modules at `http://localhost:8000`:
 
 | Endpoint Group | Path Prefix | Description |
 |---|---|---|
@@ -485,10 +492,27 @@ The backend exposes **15 route modules** at `http://localhost:8000`:
 | Digests | `/api/digests` | AI-generated content digests |
 | Scheduler | `/api/scheduler` | Cron jobs & reminders |
 | Settings | `/api/settings` | System configuration |
+| Auth | `/api/auth` | Token exchange and session authentication |
+| Research | `/api/research` | Research tasks, reports, and claims |
+| Apps | `/api/apps` | MCP app connection management |
 
 **WebSocket**: `ws://localhost:8000/ws/telemetry` — real-time hardware metrics stream
 
 **Health Check**: `GET /health` — service status
+
+## ✅ Verification & Quality Gates
+
+Run the unified local verification suite from the repository root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify.ps1
+```
+
+This verification gate enforces:
+1. **Production AST Zero-Stub Check** (`scripts/check_stubs.py`): Ensures zero unhandled `pass`, `...`, or `NotImplementedError` bodies in production code.
+2. **Backend Test Suite**: 233 comprehensive unit and integration tests across agents, runtime, governance, and database persistence.
+3. **Frontend Test Suite**: Vitest runner covering Zustand stores and API client bindings.
+4. **API Readiness Probe**: `GET /health/ready` tests configuration validity, database connectivity (operational, audit, knowledge), and model runtime availability without loading weights.
 
 ---
 
@@ -536,6 +560,25 @@ KV Cache:              Q8_0
 - **Circuit breaker**: Watchdog detects crash loops and enters cooldown (600s)
 - **Safe mode triggers**: GPU driver failures, SQLite corruption, excessive RAM pressure, security violations
 - **Safe mode allows only**: Endpoint chat, file reads, memory reads, diagnostics
+
+---
+
+## 🧭 Architecture Hardening Plan
+
+All 5 phases of the Architecture Hardening Plan are **100% completed and verified**:
+- **Phase 0 (Baseline Locked)**: AST zero-stub check, contract tests, and `verify.ps1` gate.
+- **Phase 1 (Dependency Change Governance)**: Reviewable `DependencyChangePlan`, policy gate, SHA-256 manifest hashing, and auto-rollback.
+- **Phase 2 (Orchestration Boundaries)**: Extracted `AgentRuntime`, `ToolGateway`, `ProjectEnvironmentService`, and `ProjectWriteService`; reduced `BaseAgent` size by 62%.
+- **Phase 3 (Persistence Hardening)**: Typed `OperationalRepository`, `AuditRepository`, `KnowledgeRepository`; bounded lock retries (`execute_write_transaction`, `DatabaseLockError`); pre-migration backups; zero raw SQL in agents.
+- **Phase 4 (Contracts & Operations)**: `docs/openapi.json` snapshot, `/health/ready` check, structured correlation IDs (`x-correlation-id`), and managed `ServiceManager` background loops.
+- **Phase 5 (Scaling Topology ADR)**: Empirical validation of single-process local-first architecture without external broker dependencies.
+
+See the complete records:
+- [Architecture Hardening Plan](docs/ARCHITECTURE_HARDENING_PLAN.md)
+- [Architecture Blueprints & Diagrams](docs/ARCHITECTURE_BLUEPRINTS.md)
+- [Database Persistence Design](docs/DATABASE_PERSISTENCE_DESIGN.md)
+- [Production Release Checklist](docs/RELEASE_CHECKLIST.md)
+- [Scaling Decision Record](docs/SCALING_DECISION_RECORD.md)
 
 ---
 

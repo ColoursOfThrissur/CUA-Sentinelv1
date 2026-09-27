@@ -58,6 +58,7 @@ frontend/build/
 # Editor / OS noise
 .vscode/
 .idea/
+.kiro/
 *.swp
 *.swo
 .DS_Store

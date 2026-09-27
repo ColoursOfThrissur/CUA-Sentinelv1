@@ -20,7 +20,13 @@ def test_queue_priority_peek():
 
     # Clean test tasks
     conn = get_operational_db()
-    conn.execute("DELETE FROM tasks WHERE workflow_type LIKE 'TEST_%'")
+    conn.execute("DELETE FROM hitl_pending")
+    conn.execute("DELETE FROM operation_attempts")
+    conn.execute("DELETE FROM operations")
+    conn.execute("DELETE FROM task_steps")
+    conn.execute("DELETE FROM task_checkpoints")
+    conn.execute("DELETE FROM task_leases")
+    conn.execute("DELETE FROM tasks")
     conn.commit()
     conn.close()
 
@@ -80,13 +86,41 @@ def test_group_compilation_errors():
 
 def test_improvement_scout_queries():
     queries = improvement_scout.build_research_queries(os.path.abspath("."))
-    assert len(queries) > 0
+    assert len(queries) > 0, "Scout must generate at least one research query"
+    # Each query should be a non-empty string
+    for q in queries:
+        assert isinstance(q, str) and len(q.strip()) > 0, f"Query must be a non-empty string, got: {q!r}"
     print(f"test_improvement_scout_queries passed! ({len(queries)} queries generated)")
 
 
 def test_memory_layers_activity_summary():
-    summary = memory_layers.get_recent_autonomous_activity_summary(24)
-    assert isinstance(summary, str)
+    from datetime import datetime, timezone
+    conn = get_operational_db()
+    test_log_id = f"test_log_{uuid.uuid4().hex[:8]}"
+    try:
+        conn.execute(
+            """
+            INSERT INTO project_health_daemon_logs (
+                log_id, project_id, project_name, target_path, pre_health, post_health, action_taken, created_at
+            ) VALUES (?, 'proj_test', 'TestProject', 'C:/test', 80, 100, 'AUTO_REPAIRED', ?)
+            """,
+            (test_log_id, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    try:
+        summary = memory_layers.get_recent_autonomous_activity_summary(24)
+        # Summary should contain actual content, not just be an empty string
+        assert isinstance(summary, str)
+        assert len(summary) > 0, "Activity summary must not be empty"
+    finally:
+        conn = get_operational_db()
+        conn.execute("DELETE FROM project_health_daemon_logs WHERE log_id = ?", (test_log_id,))
+        conn.commit()
+        conn.close()
+
     print("test_memory_layers_activity_summary passed!")
 
 
@@ -110,6 +144,17 @@ async def test_scheduler_preemption_and_model_release():
     model_mgr = ModelManager(config, registry)
     gov = GovernanceEngine(policy, config)
     scheduler = Scheduler(queue, model_mgr, gov, config)
+
+    conn = get_operational_db()
+    conn.execute("DELETE FROM hitl_pending")
+    conn.execute("DELETE FROM operation_attempts")
+    conn.execute("DELETE FROM operations")
+    conn.execute("DELETE FROM task_steps")
+    conn.execute("DELETE FROM task_checkpoints")
+    conn.execute("DELETE FROM task_leases")
+    conn.execute("DELETE FROM tasks")
+    conn.commit()
+    conn.close()
 
     # 1. Simulate running a P2 claim
     p2_tid = queue.enqueue(workflow_type="ENDPOINT", title="P2 Worker", input_payload={}, priority=2)

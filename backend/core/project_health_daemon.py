@@ -15,6 +15,7 @@ import os
 import sys
 import json
 import uuid
+import asyncio
 import subprocess
 import logging
 from datetime import datetime, timezone, timedelta
@@ -278,10 +279,18 @@ class ProjectHealthDaemon:
             return {"status": "SKIPPED_COOLOFF", "project_name": project_name}
 
         # 3. Perform Health & Security Audit Scan
+        # Run in a worker thread so the asyncio event loop is never blocked
+        # (AST parsing + security checks can take several seconds on large projects)
         try:
             from agents.code_refactor_agent import CodeRefactorAgent
-            scanner = CodeRefactorAgent(None, None, None)
-            scan_res = scanner.scan_repository(target_path)
+            scanner = CodeRefactorAgent(None, None, {})
+            scan_res = await asyncio.wait_for(
+                asyncio.to_thread(scanner.scan_repository, target_path),
+                timeout=120.0,  # 2-minute cap; large projects won't stall the daemon loop
+            ) or {}
+        except asyncio.TimeoutError:
+            logger.warning(f"Health Daemon: scan_repository timed out for '{project_name}' after 120s — skipping")
+            return {"status": "SKIPPED_SCAN_TIMEOUT", "project_name": project_name}
         except Exception as scan_err:
             logger.error(f"Daemon scan error for {project_name}: {scan_err}")
             return {"status": "ERROR", "error": str(scan_err)}

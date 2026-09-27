@@ -18,6 +18,10 @@ class ModelLeaseError(Exception):
     pass
 
 
+class ModelInferenceError(Exception):
+    pass
+
+
 class ModelManager:
     """
     Controls which model is loaded in Ollama at any given time.
@@ -25,10 +29,24 @@ class ModelManager:
     One model in VRAM at a time — enforced here, not by Ollama config alone.
     """
 
+    # Class-level lock: only one load/evict can proceed at a time across all instances.
+    # This prevents TOCTOU races where two concurrent requests both check VRAM, both
+    # see "enough space", and then both try to load — crashing the second one.
+    _vram_lock: "asyncio.Lock | None" = None
+
+    @classmethod
+    def _get_vram_lock(cls):
+        import asyncio
+        if cls._vram_lock is None:
+            cls._vram_lock = asyncio.Lock()
+        return cls._vram_lock
+
     def __init__(self, config: dict, registry: dict):
         self.ollama_url = config["ollama"]["base_url"]
         self.keep_alive_bg = config["ollama"]["keep_alive_background"]
         self.keep_alive_endpoint = config["ollama"]["keep_alive_endpoint"]
+        self.default_top_p = float(config.get("ollama", {}).get("default_top_p", 0.9))
+        self.default_repeat_penalty = float(config.get("ollama", {}).get("default_repeat_penalty", 1.1))
         self.limits = registry["hardware_limits"]
         self.models_by_id = {m["model_id"]: m for m in registry["models"]}
         self.routing = registry["model_routing"]
@@ -118,6 +136,8 @@ class ModelManager:
             self.unload_current()
 
         try:
+            # VRAM admission check is inside the lock so two concurrent callers can't
+            # both see "enough VRAM" simultaneously and double-load.
             self.evaluate_admission(model_id, context_budget)
         except ModelAdmissionError as mae:
             # Fallback to 9B model if VRAM/geometry check failed
@@ -301,9 +321,19 @@ class ModelManager:
         m = self.models_by_id[model_id]
         context_budget = min(context_budget, m.get("context_limit_max", 8192))
         messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        effective_system_prompt = system_prompt
+        effective_user_prompt = prompt
+
+        # If system_prompt was not explicitly supplied, extract [SYSTEM RULES] if present
+        if not effective_system_prompt and prompt.startswith("[SYSTEM RULES]\n"):
+            parts = prompt.split("\n\n[TASK]\n", 1)
+            if len(parts) == 2:
+                effective_system_prompt = parts[0].replace("[SYSTEM RULES]\n", "").strip()
+                effective_user_prompt = "[TASK]\n" + parts[1]
+
+        if effective_system_prompt:
+            messages.append({"role": "system", "content": effective_system_prompt})
+        messages.append({"role": "user", "content": effective_user_prompt})
 
         try:
             with httpx.Client(timeout=300) as client:
@@ -316,6 +346,8 @@ class ModelManager:
                         "options": {
                             "temperature": temperature,
                             "num_ctx": context_budget,
+                            "top_p": getattr(self, "default_top_p", 0.9),
+                            "repeat_penalty": getattr(self, "default_repeat_penalty", 1.1),
                         },
                         "think": False,
                         "keep_alive": keep_alive or self.keep_alive_bg,
@@ -340,7 +372,10 @@ class ModelManager:
                 return content
         except Exception as e:
             logger.error(f"Inference error for model {model_id}: {e}")
-            return f"⚠️ **Ollama Service Offline or Model Loading Error**\n\nCould not connect to Ollama backend at `{self.ollama_url}` ({e}). Please ensure Ollama is running (`ollama serve`) and model `{m['ollama_tag']}` is available."
+            raise ModelInferenceError(
+                f"Could not connect to Ollama backend at `{self.ollama_url}` ({e}). "
+                f"Please ensure Ollama is running and model `{m['ollama_tag']}` is loaded."
+            ) from e
         finally:
             self._set_model_state(model_id, "READY", clear_busy=True)
 
@@ -358,9 +393,15 @@ class ModelManager:
     ) -> str:
         """
         Non-blocking async wrapper around generate().
-        Executes HTTP inference call in a worker thread so the main asyncio event loop is never blocked.
+        Acquires the class-level VRAM lock before the load step so concurrent
+        callers cannot double-load and race on VRAM admission.
         """
         import asyncio
+        # Ensure the model is loaded under the VRAM lock before entering inference
+        async with self._get_vram_lock():
+            if self._current_model_id != model_id:
+                await asyncio.to_thread(self.load_model, model_id, context_budget)
+
         return await asyncio.to_thread(
             self.generate,
             model_id,
@@ -433,6 +474,14 @@ class ModelManager:
                 "SELECT current_state FROM models_registry WHERE model_id = ?",
                 (model_id,),
             ).fetchone()
+            if row and row["current_state"] == state:
+                if clear_busy:
+                    conn.execute(
+                        "UPDATE models_registry SET busy_task_id = NULL WHERE model_id = ?",
+                        (model_id,),
+                    )
+                    conn.commit()
+                return
             if row and state not in allowed.get(row["current_state"], set()):
                 raise StateTransitionError(
                     f"Invalid model transition {row['current_state']} -> {state}"

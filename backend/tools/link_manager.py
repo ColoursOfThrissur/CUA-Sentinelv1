@@ -1,11 +1,15 @@
+import hashlib
+import ipaddress
 import json
 import logging
 import re
+import socket
 import sqlite3
 import uuid
+import asyncio
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 import httpx
 from bs4 import BeautifulSoup
 
@@ -13,6 +17,29 @@ from db.connections import get_knowledge_db, get_operational_db
 
 logger = logging.getLogger(__name__)
 
+MAX_FETCH_BYTES = 2_000_000
+MAX_REDIRECT_HOPS = 3
+
+class BlockedURLError(ValueError):
+    """Raised when URL validation fails (SSRF protection)."""
+    pass
+
+def check_url_safety(url: str) -> None:
+    """Validate that URL scheme is http/https and destination is a global non-private IP."""
+    u = urlparse(url)
+    if u.scheme not in ("http", "https") or not u.hostname:
+        raise BlockedURLError(f"Invalid or disallowed scheme: {u.scheme}")
+    if u.port not in (None, 80, 443, 8080):
+        raise BlockedURLError(f"Disallowed destination port: {u.port}")
+    try:
+        addr_info = socket.getaddrinfo(u.hostname, u.port or 443, type=socket.SOCK_STREAM)
+        for *_, sockaddr in addr_info:
+            raw_ip = sockaddr[0].split("%")[0]
+            ip = ipaddress.ip_address(raw_ip)
+            if not ip.is_global:
+                raise BlockedURLError(f"Destination IP {ip} is non-global / loopback / private")
+    except socket.gaierror as e:
+        raise BlockedURLError(f"DNS resolution failure for host '{u.hostname}': {e}")
 
 class LinkManager:
     """
@@ -24,7 +51,7 @@ class LinkManager:
     def __init__(self):
         self.http_client = httpx.AsyncClient(
             timeout=15.0,
-            follow_redirects=True,
+            follow_redirects=False,
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             },
@@ -100,13 +127,39 @@ class LinkManager:
         conn.commit()
 
         try:
-            res = await self.http_client.get(url)
-            html_content = res.text
+            # Safe HTTP fetch with SSRF validation, redirect cap, and size limit
+            current_url = url
+            res_text = ""
+            for hop in range(MAX_REDIRECT_HOPS + 1):
+                await asyncio.to_thread(check_url_safety, current_url)
+                resp = await self.http_client.get(current_url)
+                if resp.is_redirect:
+                    redir_loc = resp.headers.get("location")
+                    if not redir_loc:
+                        raise BlockedURLError("Redirect response missing Location header")
+                    current_url = urljoin(current_url, redir_loc)
+                    continue
+                
+                content_type = resp.headers.get("content-type", "")
+                if "text/html" not in content_type and "text/plain" not in content_type:
+                    raise BlockedURLError(f"Disallowed content-type: {content_type}")
+                
+                if len(resp.content) > MAX_FETCH_BYTES:
+                    raise BlockedURLError(f"Response size exceeded {MAX_FETCH_BYTES} bytes limit")
+                
+                res_text = resp.text
+                break
+            else:
+                raise BlockedURLError("Exceeded maximum redirect hops")
+
+            html_content = res_text
             soup = BeautifulSoup(html_content, "html.parser")
 
-            # Remove scripts, styles, navs, footers
+            # Remove scripts, styles, navs, footers, hidden elements
             for elem in soup(["script", "style", "nav", "footer", "header", "aside", "iframe"]):
                 elem.decompose()
+            for hidden in soup.find_all(style=re.compile(r'display:\s*none', re.I)):
+                hidden.decompose()
 
             page_title = soup.title.string.strip() if soup.title and soup.title.string else row["domain"]
 
@@ -182,10 +235,10 @@ class LinkManager:
         return list(set(found))[:5] or ["General"]
 
     def _index_to_knowledge_db(self, url: str, domain: str, title: str, text: str):
+        k_conn = get_knowledge_db()
         try:
-            k_conn = get_knowledge_db()
             doc_id = f"doc_{uuid.uuid4().hex[:12]}"
-            doc_hash = str(hash(text))
+            doc_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
 
             k_conn.execute(
                 """
@@ -204,9 +257,10 @@ class LinkManager:
                 ),
             )
             k_conn.commit()
-            k_conn.close()
         except Exception as e:
             logger.warning(f"Knowledge DB index warning for {url}: {e}")
+        finally:
+            k_conn.close()
 
     async def close(self):
         await self.http_client.aclose()

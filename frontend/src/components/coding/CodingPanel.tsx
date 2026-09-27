@@ -28,6 +28,7 @@ import {
 } from 'lucide-react'
 import { codeRefactorApi, projectsApi } from '../../api'
 import ProjectWizardModal from './ProjectWizardModal'
+import DependencyPlansModal from './DependencyPlansModal'
 import './CodingPanel.css'
 
 interface FeatureIdea {
@@ -101,6 +102,7 @@ export const CodingPanel: React.FC = () => {
   const [showResultsDrawer, setShowResultsDrawer] = useState<boolean>(false)
   const [statusMessage, setStatusMessage] = useState<string>('')
   const [createdProjectData, setCreatedProjectData] = useState<any>(null)
+  const [showDepModal, setShowDepModal] = useState<boolean>(false)
 
   // Auto-resolve registered project from backend on mount
   useEffect(() => {
@@ -307,8 +309,11 @@ export const CodingPanel: React.FC = () => {
                 <button className="btn btn-secondary" onClick={handleScan} disabled={scanning || executing}>
                   <FolderSearch size={15} /> {scanning ? 'Scanning AST...' : 'Scan Project & AST'}
                 </button>
+                <button className="btn btn-secondary" onClick={() => setShowDepModal(true)}>
+                  <PackageCheck size={15} /> Dependency Governance
+                </button>
                 <button className="btn btn-secondary" onClick={handleInstallDeps} disabled={scanning || executing || installingDeps}>
-                  <PackageCheck size={15} /> {installingDeps ? 'Installing...' : 'Install Missing Libs'}
+                  <Wrench size={15} /> {installingDeps ? 'Installing...' : 'Quick Install'}
                 </button>
                 {scanResult && (
                   <button className="btn btn-secondary" onClick={handleLaunchPreview} disabled={launchingPreview}>
@@ -824,6 +829,12 @@ export const CodingPanel: React.FC = () => {
           </div>
         </div>
       )}
+
+      <DependencyPlansModal
+        isOpen={showDepModal}
+        onClose={() => setShowDepModal(false)}
+        projectPath={projectPath}
+      />
     </div>
   )
 }

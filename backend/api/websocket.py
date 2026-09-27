@@ -20,7 +20,8 @@ class ConnectionManager:
         logger.info(f"WebSocket connected. Total: {len(self._connections)}")
 
     def disconnect(self, ws: WebSocket) -> None:
-        self._connections.remove(ws)
+        if ws in self._connections:
+            self._connections.remove(ws)
         logger.info(f"WebSocket disconnected. Total: {len(self._connections)}")
 
     async def broadcast(self, message: dict) -> None:
@@ -31,7 +32,8 @@ class ConnectionManager:
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            self._connections.remove(ws)
+            if ws in self._connections:
+                self._connections.remove(ws)
 
     def has_connections(self) -> bool:
         return len(self._connections) > 0
@@ -40,19 +42,54 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-@router.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+def _check_ws_auth(websocket: WebSocket) -> bool:
+    """
+    Validate WebSocket auth via query param token or x-sentinel-token header.
+    Returns True if auth passes or is disabled (token not configured).
+    """
     token = os.getenv("SENTINEL_API_TOKEN", "")
     auth_enabled = bool(token and token != "change_me_generate_a_real_token")
-    supplied = websocket.query_params.get("token") or websocket.headers.get("x-sentinel-token")
-    if auth_enabled and supplied != token:
+    if not auth_enabled:
+        return True
+    supplied = (
+        websocket.query_params.get("token")
+        or websocket.headers.get("x-sentinel-token")
+    )
+    return supplied == token
+
+
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    if not _check_ws_auth(websocket):
         await websocket.close(code=1008)
+        logger.warning(f"WebSocket rejected: invalid token from {websocket.client}")
         return
 
     await manager.connect(websocket)
     try:
         while True:
-            # Keep connection alive, client sends pings
+            # Keep connection alive; client sends pings
+            data = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+            if data == "ping":
+                await websocket.send_text(json.dumps({"type": "pong"}))
+    except (WebSocketDisconnect, asyncio.TimeoutError):
+        manager.disconnect(websocket)
+
+
+@router.websocket("/ws/telemetry")
+async def websocket_telemetry_endpoint(websocket: WebSocket):
+    """
+    Dedicated telemetry endpoint (matches the /ws/telemetry path in README).
+    Same auth as the main /ws endpoint — no unauthenticated hardware data leaks.
+    """
+    if not _check_ws_auth(websocket):
+        await websocket.close(code=1008)
+        logger.warning(f"Telemetry WebSocket rejected: invalid token from {websocket.client}")
+        return
+
+    await manager.connect(websocket)
+    try:
+        while True:
             data = await asyncio.wait_for(websocket.receive_text(), timeout=30)
             if data == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))

@@ -54,6 +54,7 @@ class CodeRefactorAgent(BaseAgent):
                     full_path = os.path.join(root, f)
                     rel_path = os.path.relpath(full_path, project_path)
                     try:
+                        code_diff_engine.record_file_read(full_path)
                         with open(full_path, "r", encoding="utf-8", errors="ignore") as fh:
                             content = fh.read(15000) # Read first 15k chars
                         file_entries.append({
@@ -292,8 +293,21 @@ Provide a brief natural language summary of what was diagnosed and fixed before 
             return {"success": False, "error": str(err)}
 
     def _extract_and_write_code_blocks(self, project_path: str, text: str, target_file_path: Optional[str] = None, task_id: Optional[str] = None) -> List[str]:
-        from core.execution_broker import execution_broker
-        file_ops = execution_broker.parse_raw_llm_code_blocks(text)
+        # Priority 1: Check for SEARCH/REPLACE blocks (Pillar 1 - Surgical Edit)
+        if target_file_path and "<<<<<<< SEARCH" in text:
+            abs_target = os.path.normpath(os.path.join(project_path, target_file_path))
+            if os.path.exists(abs_target):
+                code_diff_engine.record_file_read(abs_target)
+                diff_res = code_diff_engine.apply_search_replace_blocks(abs_target, text, require_read=True)
+                if diff_res.get("success") and diff_res.get("blocks_applied", 0) > 0:
+                    logger.info(f"_extract_and_write_code_blocks: Applied {diff_res['blocks_applied']} SEARCH/REPLACE block(s) to {target_file_path}")
+                    return [target_file_path]
+                else:
+                    logger.warning(f"_extract_and_write_code_blocks: SEARCH/REPLACE failed for {target_file_path}: {diff_res.get('error')}")
+
+        # Priority 2: Standard file operation plans with code fence
+        from core.project_write_service import project_write_service
+        file_ops = project_write_service.parse_file_plan(text)
 
         # Strict Target File Scoping & Sanity Validation
         if target_file_path and file_ops:
@@ -319,19 +333,11 @@ Provide a brief natural language summary of what was diagnosed and fixed before 
 
             file_ops = valid_ops
 
-        written = execution_broker.execute_write_plan(project_path, file_ops, task_id=task_id)
+        written = project_write_service.execute_write_plan(project_path, file_ops, task_id=task_id)
         if written:
             return written
 
-        # Fallback 1: Check for SEARCH/REPLACE blocks (Pillar 1)
-        if target_file_path:
-            abs_target = os.path.normpath(os.path.join(project_path, target_file_path))
-            diff_res = code_diff_engine.apply_search_replace_blocks(abs_target, text)
-            if diff_res.get("success") and diff_res.get("blocks_applied", 0) > 0:
-                logger.info(f"_extract_and_write_code_blocks: Applied {diff_res['blocks_applied']} SEARCH/REPLACE block(s) to {target_file_path}")
-                return [target_file_path]
-
-        # Fallback 2: If LLM outputted a single markdown code block without filepath header for target_file_path
+        # Fallback 1: If target_file_path and LLM outputted a single markdown code block without filepath header
         if target_file_path and "```" in text:
             import re
             m = re.search(r'```(?:\w+)?\n(.*?)```', text, re.DOTALL)
@@ -343,7 +349,7 @@ Provide a brief natural language summary of what was diagnosed and fixed before 
                 code_clean = "\n".join(lines).strip()
                 if code_clean:
                     single_op = [{"rel_path": target_file_path, "content": code_clean}]
-                    return execution_broker.execute_write_plan(project_path, single_op, task_id=task_id)
+                    return project_write_service.execute_write_plan(project_path, single_op, task_id=task_id)
 
         return []
 
@@ -354,6 +360,7 @@ Provide a brief natural language summary of what was diagnosed and fixed before 
         try:
             abs_path = os.path.join(project_path, rel_path)
             if os.path.exists(abs_path):
+                code_diff_engine.record_file_read(abs_path)
                 with open(abs_path, "r", encoding="utf-8", errors="ignore") as f:
                     content = f.read()
                 if len(content) > max_chars:
@@ -1031,7 +1038,67 @@ Rules:
                     f"Expected symbols to define in this file: {expected_syms if expected_syms else 'as needed'}"
                 )
 
-            base_prompt = f"""You are an expert software engineer. Write the file '{file_path}' for this project.
+            existing_target_full = os.path.normpath(os.path.join(project_path, file_path))
+            target_exists = os.path.isfile(existing_target_full)
+            if target_exists:
+                code_diff_engine.record_file_read(existing_target_full)
+
+            if file_action == "modify" and target_exists:
+                existing_file_content = self._read_file_safe(project_path, file_path, max_chars=8000)
+                base_prompt = f"""You are an expert software engineer performing a surgical code modification.
+Your task is to modify the existing file '{file_path}' to accomplish the active goal.
+
+WORKSPACE CONTRACT BOUNDARIES (DO NOT import symbols or packages not in this list — they do not exist):
+{contract_context[:1500] if contract_context else "Not available."}
+
+CURRENT CONTENT OF '{file_path}':
+```{lang}
+{existing_file_content}
+```
+
+PROJECT CONTEXT (other entry points):
+{context_block}
+
+ARCHITECTURE PLAN CONTEXT:
+{ir_node_context if ir_node_context else "Modify file according to the goal above."}
+
+HISTORICAL SPEC (for background context only):
+{blueprint_content[:1500] if blueprint_content else "None."}
+
+CRITICAL ARCHITECTURAL CONSTRAINTS:
+- THINKING CONSTRAINT: Keep internal reasoning brief (under 5 short bullet points). Do not explore tangents or alternative frameworks.
+- FRAMEWORK PINNING: The backend MUST use FastAPI. DO NOT use Flask, Django, or generic scripts. All routers must use fastapi.APIRouter.
+- EXTERNAL UI LIBRARIES FORBIDDEN: DO NOT import antd, @mui, chakra-ui, or packages not in package.json. Use only React, Lucide icons, and pure CSS.
+- PRESERVATION INVARIANT: Preserve all existing code not directly related to the modification. Do NOT rewrite the entire file.
+
+SURGICAL EDIT MANDATE:
+Output one or more SEARCH / REPLACE blocks in the following exact format:
+
+<<<<<<< SEARCH
+[exact lines from current file to replace - must be unique]
+=======
+[replacement lines with modifications]
+>>>>>>> REPLACE
+
+RULES FOR SEARCH/REPLACE BLOCKS:
+1. The SEARCH section must match the EXACT characters, whitespace, and indentation in the existing file.
+2. The SEARCH section must be UNIQUE in the file (include 3-5 lines of surrounding context so it matches in only one place).
+3. Do not include line numbers.
+4. If you need to make multiple changes across the file, output multiple consecutive SEARCH/REPLACE blocks.
+5. Alternatively, if replacing the entire file is absolutely necessary, output a standard markdown code block with '{comment_char} filepath: {file_path}'.
+
+======================================================================
+>>> CURRENT ACTIVE USER DIRECTIVE (HIGHEST PRIORITY) <<<
+GOAL: {goal_instruction}
+TARGET FILE: {file_path}
+ACTION: modify
+PURPOSE: {file_purpose}
+NOTE: This active directive overrides all conflicting previous instructions, earlier specs, or historical assumptions.
+======================================================================
+
+Output your surgical SEARCH/REPLACE blocks now:"""
+            else:
+                base_prompt = f"""You are an expert software engineer. Write the file '{file_path}' for this project.
 
 WORKSPACE CONTRACT BOUNDARIES (DO NOT import symbols or packages not in this list — they do not exist):
 {contract_context[:1500] if contract_context else "Not available."}
@@ -1099,16 +1166,26 @@ Write production-quality, fully functional code. No placeholders, no TODOs."""
                     # Zero-file detection
                     if not written:
                         if attempt < 2:
-                            current_prompt = (
-                                f"CRITICAL FORMAT ERROR: Your response contained NO code blocks with "
-                                f"filepath comments, so NO files were written.\n\n"
-                                f"You MUST use this exact format — the filepath comment must be the "
-                                f"FIRST LINE inside the code block:\n\n"
-                                f"```{lang}\n{comment_char} filepath: {file_path}\n"
-                                f"[your complete code here]\n```\n\n"
-                                f"Now write '{file_path}' for this goal:\n{goal_instruction}\n"
-                                f"Purpose: {file_purpose}"
-                            )
+                            if file_action == "modify" and target_exists:
+                                current_prompt = (
+                                    f"CRITICAL FORMAT ERROR: Your response contained NO valid SEARCH/REPLACE blocks or code blocks for '{file_path}'.\n\n"
+                                    f"You MUST use this exact format:\n\n"
+                                    f"<<<<<<< SEARCH\n[exact existing lines from {file_path}]\n=======\n[replacement lines]\n>>>>>>> REPLACE\n\n"
+                                    f"Or alternatively output a complete code block:\n"
+                                    f"```{lang}\n{comment_char} filepath: {file_path}\n[code]\n```\n\n"
+                                    f"Now write the modifications for '{file_path}':\nGoal: {goal_instruction}\n"
+                                )
+                            else:
+                                current_prompt = (
+                                    f"CRITICAL FORMAT ERROR: Your response contained NO code blocks with "
+                                    f"filepath comments, so NO files were written.\n\n"
+                                    f"You MUST use this exact format — the filepath comment must be the "
+                                    f"FIRST LINE inside the code block:\n\n"
+                                    f"```{lang}\n{comment_char} filepath: {file_path}\n"
+                                    f"[your complete code here]\n```\n\n"
+                                    f"Now write '{file_path}' for this goal:\n{goal_instruction}\n"
+                                    f"Purpose: {file_purpose}"
+                                )
                             logger.warning(
                                 f"File {file_path} attempt {attempt+1}: zero files written, retrying with format reminder"
                             )
@@ -1157,17 +1234,25 @@ Write production-quality, fully functional code. No placeholders, no TODOs."""
                 ai_thought = last_response.split("```")[0].strip()[:600]
 
             rich_summary_lines = []
-            rich_summary_lines.append(f"Action: [{file_action.upper()}] {file_path}")
-            if file_purpose:
-                rich_summary_lines.append(f"Purpose: {file_purpose}")
-            rich_summary_lines.append(f"Output: {line_count} lines written ({bytes_written} bytes) · Attempts: {attempt + 1}")
-            rich_summary_lines.append("Verification: ✅ AST Syntax Passed · No placeholder stubs")
+            if written:
+                rich_summary_lines.append(f"Action: [{file_action.upper()}] {file_path}")
+                if file_purpose:
+                    rich_summary_lines.append(f"Purpose: {file_purpose}")
+                rich_summary_lines.append(f"Output: {line_count} lines written ({bytes_written} bytes) · Attempts: {attempt + 1}")
+                rich_summary_lines.append("Verification: ✅ AST Syntax Passed · No placeholder stubs")
+            else:
+                rich_summary_lines.append(f"Action: [{file_action.upper()}] {file_path} (FAILED)")
+                if file_purpose:
+                    rich_summary_lines.append(f"Purpose: {file_purpose}")
+                rich_summary_lines.append(f"Exhausted {attempt + 1} attempts — zero valid files produced or verification failed")
+
             if ai_thought:
                 rich_summary_lines.append(f"Rationale: {ai_thought}")
 
             rich_summary = "\n".join(rich_summary_lines)
 
-            self.update_step_status(file_step_id, "COMPLETED", {
+            file_step_status = "COMPLETED" if written else "FAILED"
+            self.update_step_status(file_step_id, file_step_status, {
                 "summary": rich_summary,
                 "files_written": written,
                 "success": len(written) > 0,
@@ -1179,7 +1264,7 @@ Write production-quality, fully functional code. No placeholders, no TODOs."""
                 "ai_thought": ai_thought
             })
             await self.broadcast_step_trace(
-                task_id, f"Wrote {file_path}", "LocalLLM", "COMPLETED",
+                task_id, f"{'Wrote' if written else 'Failed to write'} {file_path}", "LocalLLM", file_step_status,
                 {
                     "files_written": written,
                     "attempts": attempt + 1,
@@ -1233,81 +1318,82 @@ Write production-quality, fully functional code. No placeholders, no TODOs."""
             logger.info(f"Alignment auto-remediated: {alignment_res['remediation_logs']}")
             try:
                 await self._run_batch_compile_and_heal(project_path, all_written_files, task_id, model_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Batch compile/heal pass failed: {e}")
 
         # Closed-loop retry cycle: if alignment failed after auto-remediation, run up to 2 targeted healing passes
-        for alignment_cycle in range(2):
-            if alignment_res.get("passed"):
-                break
+        if all_written_files:
+            for alignment_cycle in range(2):
+                if alignment_res.get("passed"):
+                    break
 
-            logger.warning(
-                f"Alignment drift detected (Score: {alignment_res['overall_alignment_score']}%). "
-                f"Triggering closed-loop refactor cycle {alignment_cycle + 2}/3..."
-            )
-            feedback_prompt = alignment_validator.build_alignment_feedback_prompt(
-                goal_instruction, alignment_res, alignment_cycle
-            )
-            await self.broadcast_step_trace(
-                task_id, "ALIGNMENT_CHECK", "AlignmentValidator", "RUNNING",
-                {"retry_cycle": alignment_cycle + 2, "score": alignment_res["overall_alignment_score"], "issues": alignment_res["issues"][:3]}
-            )
-
-            try:
-                plan_prompt_heal = (
-                    f"You are a senior software architect. Fix the following alignment issues in the project.\n\n"
-                    f"Project path: {project_path}\n"
-                    f"{feedback_prompt}\n\n"
-                    f"Output ONLY a JSON object format:\n"
-                    f"{{\n"
-                    f'  "files": [\n'
-                    f'    {{"path": "relative/path/to/file", "action": "modify", "purpose": "Fix specific alignment issue"}}\n'
-                    f"  ]\n"
-                    f"}}\n"
+                logger.warning(
+                    f"Alignment drift detected (Score: {alignment_res['overall_alignment_score']}%). "
+                    f"Triggering closed-loop refactor cycle {alignment_cycle + 2}/3..."
                 )
-                heal_plan_res = await self.model_manager.generate_async(
-                    model_id=model_id,
-                    task_id=task_id,
-                    lease_id="internal",
-                    lease_generation=0,
-                    prompt=plan_prompt_heal,
-                    temperature=0.05,
+                feedback_prompt = alignment_validator.build_alignment_feedback_prompt(
+                    goal_instruction, alignment_res, alignment_cycle
                 )
-                import re as _re
-                m = _re.search(r'\{[\s\S]*\}', heal_plan_res)
-                heal_files = json.loads(m.group()).get("files", []) if m else []
+                await self.broadcast_step_trace(
+                    task_id, "ALIGNMENT_CHECK", "AlignmentValidator", "RUNNING",
+                    {"retry_cycle": alignment_cycle + 2, "score": alignment_res["overall_alignment_score"], "issues": alignment_res["issues"][:3]}
+                )
 
-                for tf in heal_files[:3]:
-                    fpath = tf.get("path")
-                    if not fpath:
-                        continue
-                    gen_prompt = (
-                        f"Fix the alignment issue for '{fpath}'.\n"
-                        f"{feedback_prompt}\n"
-                        f"Write the complete working code:\n"
-                        f"```tsx\n"
-                        f"// filepath: {fpath}\n"
-                        f"[complete code]\n"
-                        f"```"
+                try:
+                    plan_prompt_heal = (
+                        f"You are a senior software architect. Fix the following alignment issues in the project.\n\n"
+                        f"Project path: {project_path}\n"
+                        f"{feedback_prompt}\n\n"
+                        f"Output ONLY a JSON object format:\n"
+                        f"{{\n"
+                        f'  "files": [\n'
+                        f'    {{"path": "relative/path/to/file", "action": "modify", "purpose": "Fix specific alignment issue"}}\n'
+                        f"  ]\n"
+                        f"}}\n"
                     )
-                    gen_res = await self.model_manager.generate_async(
+                    heal_plan_res = await self.model_manager.generate_async(
                         model_id=model_id,
                         task_id=task_id,
                         lease_id="internal",
                         lease_generation=0,
-                        prompt=gen_prompt,
+                        prompt=plan_prompt_heal,
                         temperature=0.05,
                     )
-                    written_now = self._extract_and_write_code_blocks(project_path, gen_res, target_file_path=fpath)
-                    all_written_files.extend(written_now)
+                    import re as _re
+                    m = _re.search(r'\{[\s\S]*\}', heal_plan_res)
+                    heal_files = json.loads(m.group()).get("files", []) if m else []
 
-                self._run_wireup_pass(project_path, task_id, all_written_files)
-                alignment_res = alignment_validator.validate_solution(
-                    project_path, goal_instruction, all_written_files, auto_remediate=True
-                )
-            except Exception as heal_cycle_err:
-                logger.warning(f"Alignment closed-loop heal cycle {alignment_cycle + 2} error: {heal_cycle_err}")
-                break
+                    for tf in heal_files[:3]:
+                        fpath = tf.get("path")
+                        if not fpath:
+                            continue
+                        gen_prompt = (
+                            f"Fix the alignment issue for '{fpath}'.\n"
+                            f"{feedback_prompt}\n"
+                            f"Write the complete working code:\n"
+                            f"```tsx\n"
+                            f"// filepath: {fpath}\n"
+                            f"[complete code]\n"
+                            f"```"
+                        )
+                        gen_res = await self.model_manager.generate_async(
+                            model_id=model_id,
+                            task_id=task_id,
+                            lease_id="internal",
+                            lease_generation=0,
+                            prompt=gen_prompt,
+                            temperature=0.05,
+                        )
+                        written_now = self._extract_and_write_code_blocks(project_path, gen_res, target_file_path=fpath)
+                        all_written_files.extend(written_now)
+
+                    self._run_wireup_pass(project_path, task_id, all_written_files)
+                    alignment_res = alignment_validator.validate_solution(
+                        project_path, goal_instruction, all_written_files, auto_remediate=True
+                    )
+                except Exception as heal_cycle_err:
+                    logger.warning(f"Alignment closed-loop heal cycle {alignment_cycle + 2} error: {heal_cycle_err}")
+                    break
 
         self.update_step_status(alignment_step_id, "COMPLETED", {
             "overall_alignment_score": alignment_res.get("overall_alignment_score", 100),
@@ -1332,10 +1418,11 @@ Write production-quality, fully functional code. No placeholders, no TODOs."""
         post_scan = self.scan_repository(project_path)
         post_health = post_scan.get("health_assessment", {}).get("overall_score", pre_health)
 
-        # ── Step 6: Environment Repair Gate ───────────────────────────────
+        # ── Step 6: Environment Dependency Planning Gate ────────────────────
         try:
-            from core.environment_engine import environment_engine
-            environment_engine.scan_and_install_dependencies(project_path)
+            from core.project_environment_service import project_environment_service
+            project_environment_service.scan_missing_dependencies(project_path)
+            project_environment_service.ensure_env_defaults(project_path)
         except Exception as env_err:
             logger.warning(f"Post-execution env scan: {env_err}")
 

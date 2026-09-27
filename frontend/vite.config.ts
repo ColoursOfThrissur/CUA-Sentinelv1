@@ -28,10 +28,12 @@ export default defineConfig({
       : []),
   ],
   server: {
+    host: '127.0.0.1',
+    port: 5173,
     allowedHosts: true,
     proxy: {
-      '/api': { target: 'http://localhost:8000', changeOrigin: true },
-      '/ws': { target: 'ws://localhost:8000', ws: true, changeOrigin: true, configure: (proxy) => { proxy.on('error', () => {}) } },
+      '/api': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/ws': { target: 'ws://127.0.0.1:8000', ws: true, changeOrigin: true, configure: (proxy) => { proxy.on('error', () => {}) } },
     },
   },
 })

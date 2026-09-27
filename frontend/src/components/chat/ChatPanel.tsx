@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
-import { Trash2, Bot, FileText, Globe2, MessageSquare, Send, Sparkles, TrendingUp, Search, Activity, ChevronDown, ChevronRight, Download } from 'lucide-react'
+import { Trash2, Bot, FileText, Globe2, MessageSquare, Send, Sparkles, TrendingUp, Search, Activity, ChevronDown, ChevronRight, Download, Check, X, Box, ShieldCheck, Play } from 'lucide-react'
 import { useSentinelStore } from '../../store'
+import { chatApi, hitlApi } from '../../api'
 import './ChatPanel.css'
 
 export interface Message { role: 'user' | 'assistant'; content: string; task_id?: string }
@@ -35,8 +36,38 @@ export default function ChatPanel({ messages, input, loading, webEnabled, pendin
   const navigate  = useNavigate()
   const [isFocused, setIsFocused] = useState(false)
   const [expandedTraces, setExpandedTraces] = useState<Record<string, boolean>>({})
-  const { agentTraces, hitlPending, telemetry } = useSentinelStore()
+  const [approvedBuilds, setApprovedBuilds] = useState<Record<string, boolean>>({})
+  const [approvingBuildId, setApprovingBuildId] = useState<string | null>(null)
+  const [approvedPlans, setApprovedPlans] = useState<Record<string, boolean>>({})
+  const { agentTraces, hitlPending, setHitlPending, telemetry } = useSentinelStore()
   const safeMessages = Array.isArray(messages) ? messages : []
+
+  const handleApproveSpec = async (buildId: string) => {
+    setApprovingBuildId(buildId)
+    try {
+      await chatApi.approveSpec(buildId)
+      setApprovedBuilds(prev => ({ ...prev, [buildId]: true }))
+    } catch (e) {
+      console.error('Failed to approve 3D spec:', e)
+    } finally {
+      setApprovingBuildId(null)
+    }
+  }
+
+  const handleResolveHitl = async (approvalId: string, approved: boolean) => {
+    try {
+      await hitlApi.resolve(approvalId, approved)
+      setHitlPending(hitlPending.filter((h) => h.approval_id !== approvalId))
+    } catch (e) {
+      console.error('Failed to resolve governance action in chat:', e)
+    }
+  }
+
+  const handleExecutePlan = (planPrompt: string, planKey: string) => {
+    setApprovedPlans(prev => ({ ...prev, [planKey]: true }))
+    onInput(planPrompt)
+    setTimeout(() => onSend(), 50)
+  }
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [safeMessages, loading])
 
@@ -128,7 +159,7 @@ export default function ChatPanel({ messages, input, loading, webEnabled, pendin
               }
               <div className={`message-bubble ${m.role === 'user' ? 'msg-user' : 'msg-assistant'}`}>
                 {m.role === 'assistant'
-                  ? <ReactMarkdown>{m.content}</ReactMarkdown>
+                  ? <ReactMarkdown disallowedElements={['img']} unwrapDisallowed>{m.content}</ReactMarkdown>
                   : m.content}
 
                 {/* Generative Interactive Stock Quote Card */}
@@ -155,21 +186,26 @@ export default function ChatPanel({ messages, input, loading, webEnabled, pendin
                   let tickerName = ""
                   let tickerSymbol = ""
 
-                  // Check known tickers first
-                  for (const [keyword, [name, symbol]] of Object.entries(KNOWN_TICKERS)) {
-                    if (contentLower.includes(keyword)) {
-                      tickerName = name
-                      tickerSymbol = symbol
-                      break
-                    }
+                  // Finance context keywords to ensure we don't false-trigger on words like 'meta', 'apple', 'amazon' in general or 3D contexts
+                  const hasFinanceContext = /\b(stock|price|share|shares|market|nasdaq|nyse|dividend|trading|invest|quote|valuation|portfolio|watchlist|earnings)\b/i.test(contentLower)
+                  const isBlenderOr3DContext = /\b(blender|spec3d|metallic|roughness|mesh|geometry|viewport|render|polygon|build_spec)\b/i.test(contentLower)
+
+                  // Fallback 1: detect explicit $SYMBOL patterns (e.g. $AAPL, $TSLA, $META) — highest confidence
+                  const dollarMatch = m.content.match(/\$([A-Z]{2,5}(?:\.[A-Z]{2})?)\b/);
+                  if (dollarMatch) {
+                    tickerSymbol = dollarMatch[1]
+                    tickerName = tickerSymbol
                   }
 
-                  // Fallback: detect $SYMBOL patterns (e.g. $AAPL, $TSLA)
-                  if (!tickerSymbol) {
-                    const dollarMatch = m.content.match(/\$([A-Z]{2,5}(?:\.[A-Z]{2})?)/);
-                    if (dollarMatch) {
-                      tickerSymbol = dollarMatch[1]
-                      tickerName = tickerSymbol
+                  // Fallback 2: Check known tickers ONLY if financial intent is present and not a 3D/Blender context
+                  if (!tickerSymbol && hasFinanceContext && !isBlenderOr3DContext) {
+                    for (const [keyword, [name, symbol]] of Object.entries(KNOWN_TICKERS)) {
+                      const regex = new RegExp(`\\b${keyword.replace('.', '\\.')}\\b`, 'i')
+                      if (regex.test(contentLower)) {
+                        tickerName = name
+                        tickerSymbol = symbol
+                        break
+                      }
                     }
                   }
 
@@ -191,47 +227,210 @@ export default function ChatPanel({ messages, input, loading, webEnabled, pendin
                   )
                 })()}
 
+                {/* 3D Spec Approval Card */}
+                {m.role === 'assistant' && (() => {
+                  const match = m.content.match(/\b(?:save\s+as\s+approved|build_id[:=]\s*["']?|build\s*#?)\s*([a-f0-9]{6,12})\b/i)
+                    || m.content.match(/"build_id"\s*:\s*"([a-f0-9]{6,12})"/i);
+                  if (!match) return null;
+                  const buildId = match[1].toLowerCase();
+                  const isApproved = approvedBuilds[buildId];
+
+                  // Extract model name if mentioned
+                  const nameMatch = m.content.match(/(?:model_name|Model|spec for ['"]?)([\w_]+)/i);
+                  const modelName = nameMatch ? nameMatch[1] : '3D Model';
+
+                  // Extract poly count if mentioned
+                  const polyMatch = m.content.match(/(?:poly_count|polys?|polygons?)[:\s]+(\d+)/i);
+                  const polyCount = polyMatch ? polyMatch[1] : null;
+
+                  return (
+                    <div className="chat-spec3d-card animate-fade-in">
+                      <div className="chat-spec3d-header">
+                        <div className="chat-spec3d-title">
+                          <Box size={16} color="#38bdf8" />
+                          <span>{modelName} (Build #{buildId})</span>
+                        </div>
+                        {isApproved ? (
+                          <span style={{ fontSize: '0.74rem', color: '#10b981', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <Check size={14} /> Saved to Library
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handleApproveSpec(buildId)}
+                            disabled={approvingBuildId === buildId}
+                            className="btn btn-primary"
+                            style={{ fontSize: '0.75rem', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <Check size={12} /> {approvingBuildId === buildId ? 'Saving...' : 'Approve & Save to Library'}
+                          </button>
+                        )}
+                      </div>
+                      <div className="chat-spec3d-meta">
+                        {polyCount && <span>Polygons: {polyCount}</span>}
+                        <span>Status: Verified & Loaded in Blender</span>
+                        <span>Build ID: <code>{buildId}</code></span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Plan Execution Card */}
+                {m.role === 'assistant' && (() => {
+                  let planMatch = m.content.match(/```(?:json)?\s*(\{\s*"(?:action)"\s*:\s*"plan"[\s\S]*?\})\s*```/);
+                  if (!planMatch) {
+                    planMatch = m.content.match(/(\{\s*"action"\s*:\s*"plan"[\s\S]*?"(?:steps|actions)"\s*:\s*\[[\s\S]*?\][\s\S]*?\})/);
+                  }
+                  if (!planMatch) return null;
+                  try {
+                    let cleanedJson = planMatch[1];
+                    const mathPattern = /([\[,:]\s*)([\s0-9\.\+\-\*\/\(\)]*[\+\-\*\/][\s0-9\.\+\-\*\/\(\)]*?)(\s*[,\]\}])/g;
+                    for (let pass = 0; pass < 5; pass++) {
+                      const next = cleanedJson.replace(mathPattern, (match: string, p1: string, expr: string, p3: string) => {
+                        try {
+                          if (/^[\s0-9\.\+\-\*\/\(\)]+$/.test(expr)) {
+                            // eslint-disable-next-line no-new-func
+                            const val = Function('"use strict"; return (' + expr + ')')();
+                            if (typeof val === 'number' && !isNaN(val) && isFinite(val)) {
+                              return p1 + ' ' + (Math.round(val * 10000) / 10000) + p3;
+                            }
+                          }
+                        } catch {}
+                        return match;
+                      });
+                      if (next === cleanedJson) break;
+                      cleanedJson = next;
+                    }
+                    const planObj = JSON.parse(cleanedJson);
+                    const steps = planObj.steps || planObj.actions || [];
+                    if (!Array.isArray(steps) || steps.length === 0) return null;
+                    const planKey = `plan_${i}`;
+                    const isExecuted = approvedPlans[planKey];
+
+                    const taskHitl = m.task_id && Array.isArray(hitlPending)
+                      ? hitlPending.find((h) => h.task_id === m.task_id)
+                      : null;
+
+                    const backendExecuted = m.content.includes('**Action Execution Summary:**') || m.content.includes('✅');
+
+                    return (
+                      <div className="chat-plan-card animate-fade-in">
+                        <div className="chat-plan-header">
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                            <ShieldCheck size={16} /> Multi-Step Execution Plan ({steps.length} actions)
+                          </span>
+                          {taskHitl ? (
+                            <button
+                              onClick={() => handleResolveHitl(taskHitl.approval_id, true)}
+                              className="btn btn-primary"
+                              style={{ fontSize: '0.72rem', padding: '4px 8px', gap: 4 }}>
+                              <Check size={12} /> Approve & Run (requires your confirmation)
+                            </button>
+                          ) : (backendExecuted || isExecuted) ? (
+                            <span style={{ fontSize: '0.72rem', color: '#10b981', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                              <Check size={12} /> Auto-executed — verified by Sentinel
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => handleExecutePlan(`Execute this action plan:\n\`\`\`json\n${JSON.stringify(planObj, null, 2)}\n\`\`\``, planKey)}
+                              className="btn btn-primary"
+                              style={{ fontSize: '0.72rem', padding: '4px 8px', gap: 4 }}>
+                              <Play size={12} /> Execute Plan in Blender
+                            </button>
+                          )}
+                        </div>
+                        <div className="chat-plan-steps">
+                          {steps.map((st: any, sIdx: number) => (
+                            <div key={sIdx} className="chat-plan-step-item">
+                              <span style={{ color: '#38bdf8', fontWeight: 600 }}>{sIdx + 1}.</span>
+                              <span><code>{st.tool || st.name}</code></span>
+                              {st.args && <span style={{ color: '#94a3b8' }}>({Object.keys(st.args).join(', ')})</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  } catch (err) {
+                      console.error('Plan card render failed:', err);
+                    return null;
+                  }
+                })()}
+
                 {/* Contextual Smart Next-Action Chips */}
-                {m.role === 'assistant' && i === safeMessages.length - 1 && !loading && (
-                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                    <span style={{ fontSize: '0.7rem', color: '#64748b', width: '100%', marginBottom: 2 }}>Suggested next actions:</span>
-                    <button onClick={() => applyPromptChip("Check current portfolio alert statuses")} className="chat-chip" style={{ fontSize: '0.72rem', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                      <TrendingUp size={12} color="#10b981" /> Check Portfolio Alerts
-                    </button>
-                    <button onClick={() => applyPromptChip("Deep research latest developments in this sector")} className="chat-chip" style={{ fontSize: '0.72rem', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                      <Search size={12} color="#38bdf8" /> Deep Research Sector
-                    </button>
-                    <button onClick={() => applyPromptChip("Summarize key takeaways in bullet points")} className="chat-chip" style={{ fontSize: '0.72rem', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                      <FileText size={12} color="#c084fc" /> Bullet Summary
-                    </button>
-                  </div>
-                )}
+                {m.role === 'assistant' && i === safeMessages.length - 1 && !loading && (() => {
+                  const combinedText = (m.content + " " + (safeMessages[i - 1]?.content || "")).toLowerCase();
+                  const is3D = /blender|model|mesh|spec|cylinder|sphere|box|lamp|3d|render|geometry/.test(combinedText);
+                  const isFinance = /stock|portfolio|ticker|price|market|invest|dividend/.test(combinedText);
+
+                  return (
+                    <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      <span style={{ fontSize: '0.7rem', color: '#64748b', width: '100%', marginBottom: 2 }}>Suggested next actions:</span>
+                      {is3D ? (
+                        <>
+                          <button onClick={() => applyPromptChip("Inspect Blender scene manifest and objects")} className="chat-chip" style={{ fontSize: '0.72rem', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <Box size={12} color="#f59e0b" /> Inspect 3D Manifest
+                          </button>
+                          <button onClick={() => applyPromptChip("Take viewport screenshot in Blender to verify layout")} className="chat-chip" style={{ fontSize: '0.72rem', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <Search size={12} color="#38bdf8" /> Verify Viewport
+                          </button>
+                          <button onClick={() => applyPromptChip("Apply smooth shading and studio lighting to the model")} className="chat-chip" style={{ fontSize: '0.72rem', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <Sparkles size={12} color="#10b981" /> Studio Shading & Light
+                          </button>
+                        </>
+                      ) : isFinance ? (
+                        <>
+                          <button onClick={() => applyPromptChip("Check current portfolio alert statuses")} className="chat-chip" style={{ fontSize: '0.72rem', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <TrendingUp size={12} color="#10b981" /> Check Portfolio Alerts
+                          </button>
+                          <button onClick={() => applyPromptChip("Deep research latest developments in this sector")} className="chat-chip" style={{ fontSize: '0.72rem', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <Search size={12} color="#38bdf8" /> Deep Research Sector
+                          </button>
+                          <button onClick={() => applyPromptChip("Summarize key takeaways in bullet points")} className="chat-chip" style={{ fontSize: '0.72rem', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <FileText size={12} color="#c084fc" /> Bullet Summary
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => applyPromptChip("Summarize key takeaways in bullet points")} className="chat-chip" style={{ fontSize: '0.72rem', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <FileText size={12} color="#c084fc" /> Bullet Summary
+                          </button>
+                          <button onClick={() => applyPromptChip("Explain the technical details and step-by-step breakdown")} className="chat-chip" style={{ fontSize: '0.72rem', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <Sparkles size={12} color="#38bdf8" /> Technical Breakdown
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Clean Agent Execution Trace Accordion at Bottom */}
-                {m.role === 'assistant' && taskTraces.length > 0 && (
-                  <div className="trace-accordion-box" style={{ marginTop: 10 }}>
-                    <button
-                      onClick={() => m.task_id && toggleTrace(m.task_id)}
-                      className="trace-accordion-toggle">
-                      {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                      <Activity size={12} /> ⚡ Execution Details ({taskTraces.length} step{taskTraces.length > 1 ? 's' : ''})
-                    </button>
+                {m.role === 'assistant' && taskTraces.length > 0 && (() => {
+                  const dedupedTraces = Array.from(
+                    new Map(taskTraces.map((tr, i) => [tr.span_id || `${tr.step_name}-${tr.tool_name}-${i}`, tr])).values()
+                  )
+                  return (
+                    <div className="trace-accordion-box" style={{ marginTop: 10 }}>
+                      <button
+                        onClick={() => m.task_id && toggleTrace(m.task_id)}
+                        className="trace-accordion-toggle">
+                        {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                        <Activity size={12} /> ⚡ Execution Details ({dedupedTraces.length} step{dedupedTraces.length > 1 ? 's' : ''})
+                      </button>
 
-                    {isExpanded && (
-                      <div className="trace-accordion-body">
-                        {taskTraces.map((tr, idx) => (
-                          <div key={idx} className="trace-step-item">
-                            <span className="trace-step-name">{formatStepName(tr.step_name)}</span>
-                            <span className="trace-step-tool">via {tr.tool_name}</span>
-                            {tr.details && Object.keys(tr.details).length > 0 && (
-                              <span className="trace-step-details">({JSON.stringify(tr.details)})</span>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
+                      {isExpanded && (
+                        <div className="trace-accordion-body">
+                          {dedupedTraces.map((tr, idx) => (
+                            <div key={tr.span_id || idx} className="trace-step-item">
+                              <span className="trace-step-name">{formatStepName(tr.step_name)}</span>
+                              <span className="trace-step-tool">via {tr.tool_name}</span>
+                              {tr.details && Object.keys(tr.details).length > 0 && (
+                                <span className="trace-step-details">({JSON.stringify(tr.details)})</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {m.task_id && (
                   <div style={{ marginTop: 8, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -269,14 +468,30 @@ export default function ChatPanel({ messages, input, loading, webEnabled, pendin
                     {pendingApproval
                       ? '⚠️ Action Pending Governance Approval'
                       : latestTrace
-                        ? `⚡ ${formatStepName(latestTrace.step_name)}`
+                        ? `⚡ ${formatStepName(latestTrace.step_name)}${latestTrace.tool_name ? ` (${latestTrace.tool_name})` : ''}`
                         : 'Sentinel is analyzing request...'}
                   </span>
                 </div>
 
                 {pendingApproval && (
-                  <div style={{ marginTop: 6, fontSize: '0.75rem', color: '#f87171', background: 'rgba(248,113,113,0.1)', padding: '6px 10px', borderRadius: 6, border: '1px solid rgba(248,113,113,0.2)' }}>
-                    Action: <strong>{pendingApproval.action_description}</strong> requires approval in the <strong>Approvals</strong> tab.
+                  <div className="chat-approval-box animate-fade-in">
+                    <div className="chat-approval-desc">
+                      ⚠️ Action requires governance approval: <strong>{pendingApproval.action_description}</strong>
+                    </div>
+                    <div className="chat-approval-actions">
+                      <button
+                        onClick={() => handleResolveHitl(pendingApproval.approval_id, true)}
+                        className="btn btn-primary"
+                        style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <Check size={12} /> Approve Action
+                      </button>
+                      <button
+                        onClick={() => handleResolveHitl(pendingApproval.approval_id, false)}
+                        className="btn btn-ghost"
+                        style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: 4, color: '#f87171' }}>
+                        <X size={12} /> Deny
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>

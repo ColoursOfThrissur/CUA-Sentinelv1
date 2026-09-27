@@ -1,4 +1,7 @@
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 from typing import Optional
@@ -29,8 +32,8 @@ def _delete_tasks(conn, task_ids: list[str]) -> int:
             f"UPDATE models_registry SET busy_task_id = NULL, current_state = 'READY' WHERE busy_task_id IN ({placeholders})",
             task_ids,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to clear models_registry for task: {e}")
 
     # Unlink parent_task_id in child tasks
     try:
@@ -38,8 +41,8 @@ def _delete_tasks(conn, task_ids: list[str]) -> int:
             f"UPDATE tasks SET parent_task_id = NULL WHERE parent_task_id IN ({placeholders})",
             task_ids,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to clear parent_task_id: {e}")
 
     # Clear operations & operation_attempts
     try:
@@ -62,22 +65,22 @@ def _delete_tasks(conn, task_ids: list[str]) -> int:
                 f"DELETE FROM operations WHERE operation_id IN ({operation_placeholders})",
                 operation_ids,
             )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to clear operations and attempts: {e}")
 
     # Delete hitl_pending, leases, steps
     try:
         conn.execute(f"DELETE FROM hitl_pending WHERE task_id IN ({placeholders})", task_ids)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to delete hitl_pending: {e}")
     try:
         conn.execute(f"DELETE FROM task_leases WHERE task_id IN ({placeholders})", task_ids)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to delete task_leases: {e}")
     try:
         conn.execute(f"DELETE FROM task_steps WHERE task_id IN ({placeholders})", task_ids)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to delete task_steps: {e}")
 
     conn.execute(f"DELETE FROM tasks WHERE task_id IN ({placeholders})", task_ids)
     return len(task_ids)

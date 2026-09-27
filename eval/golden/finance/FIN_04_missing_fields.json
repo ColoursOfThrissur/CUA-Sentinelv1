@@ -1,0 +1,23 @@
+{
+  "id": "FIN_04",
+  "description": "Statement with missing merchant field and missing post date (only value date present).",
+  "tags": ["finance", "statement-extraction", "missing-fields"],
+  "risk": "medium",
+  "input": {
+    "prompt": "Extract transactions with incomplete metadata",
+    "workflow": "ENDPOINT"
+  },
+  "context_fixture": "Account: 8810\nValue Date: 2026-09-05 | WIRE TRANSFER CREDIT | +5,000.00 USD\nClosing Balance: 8,210.00 USD",
+  "expected": {
+    "account_last4": "8810",
+    "transaction_count": 1,
+    "transactions": [
+      {"date": "2026-09-05", "amount": 5000.00, "currency": "USD", "kind": "credit", "merchant": "UNKNOWN"}
+    ]
+  },
+  "checks": [
+    "defaults missing merchant to UNKNOWN or WIRE TRANSFER CREDIT",
+    "amount is positive credit",
+    "transaction_count == 1"
+  ]
+}

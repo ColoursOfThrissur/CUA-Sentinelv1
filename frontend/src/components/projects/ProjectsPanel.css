@@ -360,14 +360,25 @@
 /* Modals & Overlays */
 .preview-modal-overlay {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 68px;
+  right: 0;
+  bottom: 0;
+  width: calc(100vw - 68px);
   background: var(--bg-overlay);
   backdrop-filter: blur(12px);
-  z-index: 9999;
+  z-index: 125;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 2rem;
+}
+
+@media (max-width: 768px) {
+  .preview-modal-overlay {
+    left: 0;
+    width: 100vw;
+  }
 }
 
 .preview-modal-content {
@@ -450,11 +461,22 @@
 /* Log Drawer */
 .log-drawer-overlay {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 68px;
+  right: 0;
+  bottom: 0;
+  width: calc(100vw - 68px);
   background: var(--bg-overlay);
-  z-index: 9998;
+  z-index: 125;
   display: flex;
   justify-content: flex-end;
+}
+
+@media (max-width: 768px) {
+  .log-drawer-overlay {
+    left: 0;
+    width: 100vw;
+  }
 }
 
 .log-drawer-content {
@@ -497,13 +519,24 @@
 /* Modal Backdrop */
 .modal-backdrop {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 68px;
+  right: 0;
+  bottom: 0;
+  width: calc(100vw - 68px);
   background: var(--bg-overlay);
   backdrop-filter: blur(8px);
-  z-index: 9999;
+  z-index: 125;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+@media (max-width: 768px) {
+  .modal-backdrop {
+    left: 0;
+    width: 100vw;
+  }
 }
 
 .modal-card {

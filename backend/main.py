@@ -1,7 +1,12 @@
 import os
 import sys
 # Guarantee backend/ directory is on sys.path regardless of execution directory
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_ROOT_DIR = os.path.dirname(_THIS_DIR)
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
+if _ROOT_DIR not in sys.path:
+    sys.path.insert(0, _ROOT_DIR)
 
 import asyncio
 import logging
@@ -35,6 +40,137 @@ logger = logging.getLogger("sentinel.main")
 
 BOOT_ID = str(uuid.uuid4())
 
+
+async def _cache_prune_loop() -> None:
+    """Prune expired result_cache entries every 30 minutes."""
+    while True:
+        try:
+            await asyncio.sleep(1800)  # wait 30 min before first prune too
+            from core.result_cache import result_cache
+            pruned = result_cache.prune_expired()
+            if pruned > 0:
+                logger.info(f"Result cache: pruned {pruned} expired entries")
+        except Exception as e:
+            logger.warning(f"Cache prune error: {e}")
+
+
+async def _chroma_prune_loop() -> None:
+    """
+    Prune ChromaDB knowledge collection entries older than 90 days, every 24 hours.
+    Keeps the vector store from growing unbounded and degrading semantic search quality.
+    """
+    CHROMA_MAX_AGE_DAYS = 90
+    while True:
+        try:
+            await asyncio.sleep(86400)  # 24h between runs
+            pruned = await asyncio.to_thread(_prune_chroma_old_entries, CHROMA_MAX_AGE_DAYS)
+            if pruned > 0:
+                logger.info(f"ChromaDB: pruned {pruned} entries older than {CHROMA_MAX_AGE_DAYS} days")
+        except Exception as e:
+            logger.warning(f"ChromaDB prune error: {e}")
+
+
+def _prune_chroma_old_entries(max_age_days: int) -> int:
+    """
+    Deletes ChromaDB documents whose 'created_at' metadata is older than max_age_days.
+    Returns the count of deleted entries.
+    """
+    try:
+        import chromadb
+        from datetime import datetime, timezone, timedelta
+        cutoff_ts = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).timestamp()
+        client = chromadb.PersistentClient(path="data/chroma_db")
+        total_pruned = 0
+        for coll_name in [c.name for c in client.list_collections()]:
+            coll = client.get_collection(coll_name)
+            results = coll.get(include=["metadatas"])
+            ids_to_delete = []
+            for doc_id, meta in zip(results["ids"], results["metadatas"] or []):
+                created_at = (meta or {}).get("created_at")
+                if created_at:
+                    try:
+                        ts = float(created_at)
+                        if ts < cutoff_ts:
+                            ids_to_delete.append(doc_id)
+                    except (ValueError, TypeError):
+                        pass
+            if ids_to_delete:
+                coll.delete(ids=ids_to_delete)
+                total_pruned += len(ids_to_delete)
+        return total_pruned
+    except Exception as e:
+        logger.warning(f"ChromaDB prune internal error: {e}")
+        return 0
+
+
+EVAL_INTERVAL_SEC = 7 * 24 * 3600  # weekly
+
+
+async def _eval_harness_loop() -> None:
+    """
+    Runs the golden eval harness on a weekly schedule.
+    First run is delayed 5 minutes after startup to avoid competing with cold-start tasks.
+    Results are written to the audit DB and logged.  A regression (pass_rate < 0.8) logs
+    a warning so it shows up in sentinel.log and the watchdog can react.
+    """
+    await asyncio.sleep(300)  # 5-min startup grace period
+    while True:
+        try:
+            logger.info("Eval harness: starting weekly golden suite run")
+            import sys as _sys
+            _eval_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "eval")
+            if _eval_dir not in _sys.path:
+                _sys.path.insert(0, _eval_dir)
+            from eval.harness import GoldenEvalHarness
+            harness = GoldenEvalHarness()
+            report = await harness.run_suite(iterations_per_case=2)
+
+            pass_rate = report.get("pass_rate", 0.0)
+            total = report.get("total_cases", 0)
+            passed = report.get("passed_cases", 0)
+            run_id = report.get("run_id", "unknown")
+
+            # Persist summary to audit DB
+            try:
+                from db.connections import get_audit_db
+                conn = get_audit_db()
+                try:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS eval_runs (
+                            run_id TEXT PRIMARY KEY,
+                            pass_rate REAL,
+                            total_cases INTEGER,
+                            passed_cases INTEGER,
+                            report_json TEXT,
+                            created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+                        )
+                    """)
+                    conn.execute(
+                        "INSERT OR REPLACE INTO eval_runs (run_id, pass_rate, total_cases, passed_cases, report_json) VALUES (?,?,?,?,?)",
+                        (run_id, pass_rate, total, passed,
+                         __import__("json").dumps(report, default=str)[:65535]),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+            except Exception as db_err:
+                logger.warning(f"Eval harness: could not persist report: {db_err}")
+
+            if pass_rate < 0.8:
+                logger.warning(
+                    f"Eval harness REGRESSION: pass_rate={pass_rate:.0%} "
+                    f"({passed}/{total} cases) — run_id={run_id}"
+                )
+            else:
+                logger.info(
+                    f"Eval harness OK: pass_rate={pass_rate:.0%} "
+                    f"({passed}/{total} cases) — run_id={run_id}"
+                )
+        except Exception as e:
+            logger.error(f"Eval harness loop error: {e}")
+
+        await asyncio.sleep(EVAL_INTERVAL_SEC)
+
 async def startup(app: FastAPI) -> None:
     logger.info(f"CUA-Sentinel starting. Boot ID: {BOOT_ID}")
 
@@ -42,7 +178,12 @@ async def startup(app: FastAPI) -> None:
     policy = load_policy_rules()
     registry = load_model_registry()
 
+    # P0.1 Tool Registry startup validation (fail closed)
+    from config.loader import validate_tool_registry
+    validate_tool_registry()
+
     initialize_all_databases()
+
 
     conn = get_operational_db()
     try:
@@ -88,6 +229,9 @@ async def startup(app: FastAPI) -> None:
     from core.discord_bot import DiscordSentinelBot
     from core.scheduler_engine import SchedulerEngine
     from core.project_health_daemon import project_health_daemon
+    from core.background_services import BackgroundTaskGroup
+    from agents.base_agent import BaseAgent
+    BaseAgent.register_default_handlers()
 
     # Wire unified task_queue to project_health_daemon
     project_health_daemon.task_queue = task_queue
@@ -96,6 +240,20 @@ async def startup(app: FastAPI) -> None:
     AgentRegistry.register("ENDPOINT", EndpointAgent)
     AgentRegistry.register("FINANCE", EndpointAgent)
     AgentRegistry.register("BOOKMARK", EndpointAgent)
+
+    # Initialize MCP Manager for app connections
+    from core.mcp_manager import MCPManager
+    mcp_manager = MCPManager()
+    mcp_manager.initialize_from_config()
+    try:
+        await mcp_manager.auto_connect_enabled()
+    except Exception as mcp_err:
+        logger.warning(f"MCP auto-connect had errors: {mcp_err}")
+    scheduler.mcp_manager = mcp_manager
+
+    # Wire MCP manager into ToolGateway for runtime tool resolution
+    from core.tool_gateway import ToolGateway
+    ToolGateway._active_mcp_manager = mcp_manager
     AgentRegistry.register("PROJECT_HEALTH_REPAIR", ProjectRepairAgent)
     AgentRegistry.register("RESEARCH_CYCLE", ResearchCycleAgent)
     AgentRegistry.register("CODE_REFACTOR", CodeRefactorAgent)
@@ -147,10 +305,19 @@ async def startup(app: FastAPI) -> None:
     app.state.discord_bot = discord_bot
     app.state.scheduler_engine = scheduler_engine
     app.state.portfolio_watchdog = portfolio_watchdog
+    app.state.mcp_manager = mcp_manager
+    app.state.background_tasks = BackgroundTaskGroup()
 
-    asyncio.create_task(scheduler.run())
-    asyncio.create_task(watchdog.run())
-    asyncio.create_task(telemetry_loop())
+    app.state.background_tasks.start("scheduler", scheduler.run())
+    app.state.background_tasks.start("watchdog", watchdog.run())
+    app.state.background_tasks.start("telemetry", telemetry_loop())
+
+    # Maintenance loops: run at startup and then on schedule
+    app.state.background_tasks.start("cache-prune", _cache_prune_loop())
+    app.state.background_tasks.start("chroma-prune", _chroma_prune_loop())
+
+    # Eval harness: runs once at startup (after a short delay) then weekly
+    app.state.background_tasks.start("eval-harness", _eval_harness_loop())
 
     logger.info("CUA-Sentinel fully started.")
 
@@ -174,6 +341,15 @@ async def shutdown(app: FastAPI) -> None:
 
     if hasattr(app.state, "model_manager"):
         app.state.model_manager.unload_current()
+
+    if hasattr(app.state, "mcp_manager"):
+        try:
+            await app.state.mcp_manager.shutdown()
+        except Exception as e:
+            logger.warning(f"Error shutting down MCP manager: {e}")
+
+    if hasattr(app.state, "background_tasks"):
+        await app.state.background_tasks.stop()
 
     conn = get_operational_db()
     try:

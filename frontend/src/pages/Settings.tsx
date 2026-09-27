@@ -43,6 +43,13 @@ export default function Settings() {
     }
   }
 
+  const handleResetEmergencyStop = async () => {
+    if (confirm('Clear emergency stop and resume normal operations?')) {
+      await settingsApi.resetEmergencyStop()
+      settingsApi.getSystemState().then((r) => setSystemState(r.data && typeof r.data === 'object' ? r.data : {}))
+    }
+  }
+
   const handleLogout = () => {
     localStorage.removeItem('sentinel_api_token')
     window.location.reload()
@@ -94,11 +101,35 @@ export default function Settings() {
             >
               Safe Mode: {systemState.safe_mode === 'true' ? 'ON (Click to Turn OFF)' : 'OFF'}
             </button>
-            <button onClick={handleEmergencyStop} className="btn btn-danger">
-              <Power size={15} /> Emergency Stop
-            </button>
+            {systemState.emergency_stop === 'true' ? (
+              <button
+                onClick={handleResetEmergencyStop}
+                className="btn btn-success"
+                style={{ background: '#10b981', color: '#fff', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              >
+                <Power size={15} /> Resume Normal Operations (Clear Emergency Stop)
+              </button>
+            ) : (
+              <button onClick={handleEmergencyStop} className="btn btn-danger">
+                <Power size={15} /> Emergency Stop
+              </button>
+            )}
             <button onClick={handleLogout} className="btn btn-ghost">Lock</button>
           </div>
+          {systemState.emergency_stop === 'true' && (
+            <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 6, background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.4)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+              <span style={{ color: '#f87171', fontSize: '0.85rem', fontWeight: 600 }}>
+                🚨 Emergency Stop is currently ACTIVE — all agent operations and tool dispatches are halted.
+              </span>
+              <button
+                onClick={handleResetEmergencyStop}
+                className="btn btn-success"
+                style={{ fontSize: '0.78rem', padding: '4px 12px', background: '#10b981', color: '#fff' }}
+              >
+                Clear & Resume Now
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="panel settings-section">

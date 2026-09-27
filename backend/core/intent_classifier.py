@@ -72,16 +72,17 @@ class IntentClassifier:
                 }
 
         # 3. Financial Market Query
-        for pat in self.FINANCE_PATTERNS:
-            if re.search(pat, text):
-                # Check for explicit ticker
-                ticker_match = re.search(r"\b[A-Z]{2,5}(-[A-Z]{3})?\b", user_message)
-                ticker = ticker_match.group(0) if ticker_match else None
-                return {
-                    "intent": "FINANCE",
-                    "confidence": 0.90,
-                    "extracted_params": {"ticker": ticker}
-                }
+        has_finance_asset = bool(re.search(r"\b(stock|stocks|portfolio|crypto|bitcoin|btc|ethereum|eth|nvda|nvidia|aapl|tsla|gold|inr|nasdaq|dow|sp500|s&p)\b", text))
+        has_finance_action = bool(re.search(r"\b(price|ticker|quote|valuation|market cap|dividend|earnings|trading)\b", text))
+        ticker_match = re.search(r"\b[A-Z]{2,5}(-[A-Z]{3})?\b", user_message)
+        ticker = ticker_match.group(0) if ticker_match else None
+
+        if has_finance_asset or (has_finance_action and (ticker or "market" in text)):
+            return {
+                "intent": "FINANCE",
+                "confidence": 0.90 if (has_finance_asset or ticker) else 0.70,
+                "extracted_params": {"ticker": ticker}
+            }
 
         # 4. Deep Research Query
         for pat in self.RESEARCH_PATTERNS:

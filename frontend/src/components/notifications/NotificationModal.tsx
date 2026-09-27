@@ -184,8 +184,8 @@ export default function NotificationModal({ onClose }: { onClose: () => void }) 
   }
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.65)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
-      <div className="card card-glow" style={{ width: '100%', maxWidth: 540, padding: 20, background: 'var(--bg-surface)', border: '1px solid var(--border-mid)', display: 'flex', flexDirection: 'column', gap: 16, borderRadius: 14 }}>
+    <div className="modal-overlay-centered" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="card card-glow" style={{ width: '100%', maxWidth: 580, padding: 22, background: 'var(--bg-card-solid)', border: '1px solid var(--glass-border)', boxShadow: 'var(--shadow-lg)', display: 'flex', flexDirection: 'column', gap: 16, borderRadius: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Bell size={18} color="var(--c-cyan)" />

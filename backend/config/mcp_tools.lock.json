@@ -1,0 +1,74 @@
+{
+  "apps": {
+    "blender": {
+      "server": {
+        "command": "uvx",
+        "args": [
+          "blender-mcp"
+        ],
+        "env_allowlist": [
+          "SYSTEMROOT",
+          "TEMP",
+          "TMP",
+          "PATH",
+          "USERPROFILE",
+          "APPDATA",
+          "LOCALAPPDATA",
+          "PYTHONIOENCODING",
+          "PATHEXT"
+        ]
+      },
+      "tools": {
+        "execute_blender_code": {
+          "schema_sha256": "bec31364a19bfcd0fcd3225a8b78742a7655279f0fd0f3710945b0b8846e6170",
+          "description": "Internal execution bridge for validated Blender Python templates",
+          "side_effect": "act",
+          "risk_level": "L3",
+          "returns_untrusted": true,
+          "reads_private_data": false,
+          "egress": false,
+          "taint_deny": true,
+          "taint_safe": false,
+          "deny_all": true,
+          "internal_only": true,
+          "timeout_seconds": 60,
+          "allowed_agents": []
+        },
+        "get_scene_info": {
+          "schema_sha256": "0e9170f19615bcc321f79c3f264228e7475e64611d170a6b3d9053b52732a19c",
+          "description": "Query high-level metadata about the current Blender scene",
+          "side_effect": "read",
+          "risk_level": "L0",
+          "returns_untrusted": true,
+          "reads_private_data": false,
+          "egress": false,
+          "taint_deny": false,
+          "taint_safe": false,
+          "deny_all": false,
+          "internal_only": true,
+          "timeout_seconds": 15,
+          "allowed_agents": [
+            "blender_agent"
+          ]
+        },
+        "get_viewport_screenshot": {
+          "schema_sha256": "508f772c7bbabf575d1b8ad9b41998fe0a381b46e8816af2bd5bc1360723dbf7",
+          "description": "Capture current 3D viewport screenshot for verification",
+          "side_effect": "read",
+          "risk_level": "L0",
+          "returns_untrusted": true,
+          "reads_private_data": false,
+          "egress": false,
+          "taint_deny": false,
+          "taint_safe": false,
+          "deny_all": false,
+          "internal_only": true,
+          "timeout_seconds": 30,
+          "allowed_agents": [
+            "blender_agent"
+          ]
+        }
+      }
+    }
+  }
+}

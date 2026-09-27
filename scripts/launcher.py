@@ -66,6 +66,16 @@ def main():
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
 
+    if '--restart' in sys.argv or '-r' in sys.argv:
+        print('[!] Restart requested: Stopping existing Sentinel services...')
+        try:
+            from stop_services import kill_by_port
+            kill_by_port(8000, "Backend API")
+            kill_by_port(5173, "Frontend Vite")
+            time.sleep(1.0)
+        except Exception as e:
+            print(f'Warning during stop: {e}')
+
     print('=' * 65)
     print('          >> CUA-SENTINEL AUTONOMOUS AI LAUNCHER <<')
     print('=' * 65)
@@ -119,14 +129,14 @@ def main():
             print(f'FAILED: {e}')
 
     # 4. Open in Web Browser
-    print('[4/4] Launching Web Browser at http://localhost:5173...', end=' ', flush=True)
-    webbrowser.open('http://localhost:5173')
+    print(f'[4/4] Launching Web Browser at {FRONTEND_URL}...', end=' ', flush=True)
+    webbrowser.open(FRONTEND_URL)
     print('LAUNCHED!')
 
     print('=' * 65)
-    print('  [+] Dashboard:   http://localhost:5173')
-    print('  [+] Backend API: http://localhost:8000')
-    print('  [+] Ollama AI:   http://localhost:11434')
+    print(f'  [+] Dashboard:   {FRONTEND_URL}')
+    print('  [+] Backend API: http://127.0.0.1:8000')
+    print('  [+] Ollama AI:   http://127.0.0.1:11434')
     print('=' * 65)
     print('All services are operational. You can minimize this window.')
     print('To shut down all services, press Ctrl+C or close this window.')

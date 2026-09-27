@@ -282,8 +282,14 @@ export const CodeWorkspace: React.FC<CodeWorkspaceProps> = ({
             fetchTree()
           }
         }
-      } catch (err) {
-        console.error('Task polling error:', err)
+      } catch (err: any) {
+        if (err?.response?.status === 404) {
+          console.warn(`Task ${activeTaskId} not found on backend; stopping poll.`)
+          clearInterval(interval)
+          if (isMounted) setActiveTaskId(undefined)
+        } else {
+          console.error('Task polling error:', err)
+        }
       }
     }
     pollTask()

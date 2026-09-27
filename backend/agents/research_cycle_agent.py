@@ -37,5 +37,5 @@ class ResearchCycleAgent(BaseAgent):
             }
         except Exception as e:
             logger.error(f"ResearchCycleAgent error for {project_name}: {e}")
-            self.update_step_status(step_id, "FAILED", error=str(e))
+            self.update_step_status(step_id, "FAILED", output_summary={"error": str(e)})
             return {"status": "ERROR", "error": str(e)}

@@ -78,9 +78,15 @@ class Watchdog:
         import psutil
         ram = psutil.virtual_memory()
         ram_used_pct = ram.percent
-        if ram_used_pct > 92:
-            logger.warning(f"RAM pressure critical: {ram_used_pct:.1f}% used")
+        watchdog_cfg = self.config.get("watchdog", {}) if isinstance(self.config, dict) else {}
+        threshold = watchdog_cfg.get("ram_critical_pct", 98.5)
+        if ram_used_pct > threshold and ram.available < 250 * 1024 * 1024:
+            logger.warning(f"RAM pressure critical: {ram_used_pct:.1f}% used ({ram.available / (1024*1024):.0f}MB available)")
             self.scheduler.governance.enter_safe_mode(f"Excessive RAM pressure: {ram_used_pct:.1f}%")
+        elif ram_used_pct < (threshold - 2.0) and self.scheduler.governance.is_safe_mode():
+            logger.info(f"RAM pressure normalized: {ram_used_pct:.1f}% used. Auto-recovering from Safe Mode.")
+            self.scheduler.governance.exit_safe_mode()
+
 
     def _record_failure(self, component: str) -> None:
         now = datetime.now(timezone.utc).timestamp()

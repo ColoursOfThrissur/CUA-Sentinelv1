@@ -250,6 +250,20 @@ class TaskQueue:
         except Exception as e:
             logger.error(f"Failed to release task {task_id}: {e}")
 
+    def is_cancel_requested(self, task_id: str) -> bool:
+        """Return whether a task has a persisted cooperative-cancellation signal."""
+        conn = get_operational_db()
+        try:
+            row = conn.execute(
+                "SELECT status, cancel_requested_at FROM tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            return bool(
+                row
+                and (row["status"] == "CANCEL_REQUESTED" or row["cancel_requested_at"] is not None)
+            )
+        finally:
+            conn.close()
+
     def _get_lease_generation(self, task_id: str, lease_id: str) -> int:
         conn = get_operational_db()
         try:

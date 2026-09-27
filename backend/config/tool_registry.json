@@ -1,0 +1,857 @@
+{
+  "tools": {
+    "web_search": {
+      "name": "web_search",
+      "side_effect": "read",
+      "risk_level": "L0",
+      "returns_untrusted": true,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": true,
+      "timeout_seconds": 30,
+      "cost": 1,
+      "allowed_agents": [
+        "endpoint_agent",
+        "researcher",
+        "synthesizer",
+        "code_refactor_agent"
+      ]
+    },
+    "crawl_and_process": {
+      "name": "crawl_and_process",
+      "side_effect": "write",
+      "risk_level": "L1",
+      "returns_untrusted": true,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": true,
+      "timeout_seconds": 45,
+      "cost": 2,
+      "allowed_agents": [
+        "researcher"
+      ]
+    },
+    "fetch_ticker_quote": {
+      "name": "fetch_ticker_quote",
+      "side_effect": "read",
+      "risk_level": "L0",
+      "returns_untrusted": true,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": true,
+      "timeout_seconds": 15,
+      "cost": 1,
+      "allowed_agents": [
+        "endpoint_agent"
+      ]
+    },
+    "search_emails": {
+      "name": "search_emails",
+      "side_effect": "read",
+      "risk_level": "L1",
+      "returns_untrusted": true,
+      "reads_private_data": true,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": true,
+      "timeout_seconds": 20,
+      "cost": 2,
+      "allowed_agents": [
+        "endpoint_agent"
+      ]
+    },
+    "fetch_recent_emails": {
+      "name": "fetch_recent_emails",
+      "side_effect": "read",
+      "risk_level": "L1",
+      "returns_untrusted": true,
+      "reads_private_data": true,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": true,
+      "timeout_seconds": 20,
+      "cost": 2,
+      "allowed_agents": [
+        "endpoint_agent"
+      ]
+    },
+    "take_screenshot": {
+      "name": "take_screenshot",
+      "side_effect": "read",
+      "risk_level": "L0",
+      "returns_untrusted": true,
+      "reads_private_data": true,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": false,
+      "timeout_seconds": 15,
+      "cost": 1,
+      "allowed_agents": [
+        "cua_agent"
+      ]
+    },
+    "get_active_window": {
+      "name": "get_active_window",
+      "side_effect": "read",
+      "risk_level": "L0",
+      "returns_untrusted": true,
+      "reads_private_data": true,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": false,
+      "timeout_seconds": 10,
+      "cost": 1,
+      "allowed_agents": [
+        "cua_agent"
+      ]
+    },
+    "desktop_click": {
+      "name": "desktop_click",
+      "side_effect": "act",
+      "risk_level": "L3",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": false,
+      "timeout_seconds": 0,
+      "cost": 5,
+      "allowed_agents": [
+        "cua_agent"
+      ]
+    },
+    "desktop_type": {
+      "name": "desktop_type",
+      "side_effect": "act",
+      "risk_level": "L3",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": false,
+      "timeout_seconds": 0,
+      "cost": 5,
+      "allowed_agents": [
+        "cua_agent"
+      ]
+    },
+    "app_launch": {
+      "name": "app_launch",
+      "side_effect": "act",
+      "risk_level": "L3",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": false,
+      "timeout_seconds": 0,
+      "cost": 5,
+      "allowed_agents": [
+        "cua_agent"
+      ]
+    },
+    "desktop_file_write": {
+      "name": "desktop_file_write",
+      "side_effect": "write",
+      "risk_level": "L1",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": false,
+      "timeout_seconds": 15,
+      "cost": 1,
+      "allowed_agents": [
+        "cua_agent",
+        "endpoint_agent"
+      ]
+    },
+    "file_read": {
+      "name": "file_read",
+      "side_effect": "read",
+      "risk_level": "L0",
+      "returns_untrusted": true,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": false,
+      "timeout_seconds": 10,
+      "cost": 1,
+      "allowed_agents": [
+        "code_refactor_agent",
+        "endpoint_agent"
+      ]
+    },
+    "file_write": {
+      "name": "file_write",
+      "side_effect": "write",
+      "risk_level": "L1",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": false,
+      "timeout_seconds": 15,
+      "cost": 2,
+      "allowed_agents": [
+        "code_refactor_agent"
+      ]
+    },
+    "file_delete": {
+      "name": "file_delete",
+      "side_effect": "write",
+      "risk_level": "L3",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": true,
+      "taint_safe": false,
+      "egress": false,
+      "timeout_seconds": 15,
+      "cost": 3,
+      "allowed_agents": [
+        "code_refactor_agent"
+      ]
+    },
+    "git_read": {
+      "name": "git_read",
+      "side_effect": "read",
+      "risk_level": "L0",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": false,
+      "timeout_seconds": 15,
+      "cost": 1,
+      "allowed_agents": [
+        "code_refactor_agent"
+      ]
+    },
+    "git_commit": {
+      "name": "git_commit",
+      "side_effect": "write",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": false,
+      "timeout_seconds": 30,
+      "cost": 3,
+      "allowed_agents": [
+        "code_refactor_agent"
+      ]
+    },
+    "git_push": {
+      "name": "git_push",
+      "side_effect": "act",
+      "risk_level": "L3",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": true,
+      "taint_safe": false,
+      "egress": true,
+      "timeout_seconds": 0,
+      "cost": 5,
+      "allowed_agents": [
+        "code_refactor_agent"
+      ]
+    },
+    "memory_read": {
+      "name": "memory_read",
+      "side_effect": "read",
+      "risk_level": "L0",
+      "returns_untrusted": true,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": false,
+      "timeout_seconds": 10,
+      "cost": 1,
+      "allowed_agents": [
+        "endpoint_agent",
+        "researcher",
+        "code_refactor_agent"
+      ]
+    },
+    "memory_write": {
+      "name": "memory_write",
+      "side_effect": "write",
+      "risk_level": "L1",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": false,
+      "timeout_seconds": 15,
+      "cost": 2,
+      "allowed_agents": [
+        "researcher",
+        "synthesizer",
+        "endpoint_agent"
+      ]
+    },
+    "sandbox_run": {
+      "name": "sandbox_run",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": true,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": false,
+      "timeout_seconds": 60,
+      "cost": 5,
+      "allowed_agents": [
+        "code_refactor_agent"
+      ]
+    },
+    "apply_diff": {
+      "name": "apply_diff",
+      "side_effect": "write",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": false,
+      "timeout_seconds": 30,
+      "cost": 3,
+      "allowed_agents": [
+        "code_refactor_agent"
+      ]
+    },
+    "fetch_rss": {
+      "name": "fetch_rss",
+      "side_effect": "read",
+      "risk_level": "L0",
+      "returns_untrusted": true,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": true,
+      "timeout_seconds": 30,
+      "cost": 1,
+      "allowed_agents": [
+        "synthesizer"
+      ]
+    },
+    "blender:create_box": {
+      "name": "blender:create_box",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 60,
+      "cost": 3,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:create_sphere": {
+      "name": "blender:create_sphere",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 60,
+      "cost": 3,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:set_transform": {
+      "name": "blender:set_transform",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 60,
+      "cost": 2,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:get_manifest": {
+      "name": "blender:get_manifest",
+      "side_effect": "read",
+      "risk_level": "L0",
+      "returns_untrusted": true,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 30,
+      "cost": 1,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:create_cylinder": {
+      "name": "blender:create_cylinder",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 60,
+      "cost": 3,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:create_cone": {
+      "name": "blender:create_cone",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 60,
+      "cost": 3,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:create_torus": {
+      "name": "blender:create_torus",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 60,
+      "cost": 3,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:apply_subdivision": {
+      "name": "blender:apply_subdivision",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 60,
+      "cost": 3,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:apply_boolean": {
+      "name": "blender:apply_boolean",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 60,
+      "cost": 3,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:apply_bevel": {
+      "name": "blender:apply_bevel",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 60,
+      "cost": 2,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:set_smooth_shading": {
+      "name": "blender:set_smooth_shading",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 30,
+      "cost": 1,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:set_material": {
+      "name": "blender:set_material",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 30,
+      "cost": 2,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:join_objects": {
+      "name": "blender:join_objects",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 60,
+      "cost": 2,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:delete_object": {
+      "name": "blender:delete_object",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 30,
+      "cost": 1,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:clear_scene": {
+      "name": "blender:clear_scene",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 30,
+      "cost": 2,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:create_light": {
+      "name": "blender:create_light",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 30,
+      "cost": 1,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:create_camera": {
+      "name": "blender:create_camera",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 30,
+      "cost": 1,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:build_spec": {
+      "name": "blender:build_spec",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 60,
+      "cost": 5,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:save_approved": {
+      "name": "blender:save_approved",
+      "side_effect": "write",
+      "risk_level": "L1",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 30,
+      "cost": 1,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:parent_object": {
+      "name": "blender:parent_object",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 30,
+      "cost": 1,
+      "domain_success_path": "data.ok",
+      "max_retries": 1,
+      "retry_requires_input_mutation": false,
+      "disallowed_fallbacks": ["web_search", "crawl_and_process"],
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:set_origin": {
+      "name": "blender:set_origin",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 30,
+      "cost": 1,
+      "domain_success_path": "data.ok",
+      "max_retries": 1,
+      "retry_requires_input_mutation": false,
+      "disallowed_fallbacks": ["web_search"],
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:separate_mesh": {
+      "name": "blender:separate_mesh",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 30,
+      "cost": 1,
+      "domain_success_path": "data.ok",
+      "max_retries": 1,
+      "retry_requires_input_mutation": false,
+      "disallowed_fallbacks": ["web_search"],
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:decompose_assembly": {
+      "name": "blender:decompose_assembly",
+      "side_effect": "act",
+      "risk_level": "L1",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 60,
+      "cost": 3,
+      "domain_success_path": "data.graph_valid",
+      "confidence_threshold": 0.4,
+      "max_retries": 2,
+      "retry_requires_input_mutation": true,
+      "disallowed_fallbacks": ["web_search", "crawl_and_process"],
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:build_assembly_node": {
+      "name": "blender:build_assembly_node",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 60,
+      "cost": 5,
+      "domain_success_path": "data.tier2_verified",
+      "confidence_threshold": 0.4,
+      "max_retries": 3,
+      "retry_requires_input_mutation": true,
+      "disallowed_fallbacks": ["web_search", "crawl_and_process"],
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:resolve_assembly": {
+      "name": "blender:resolve_assembly",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 60,
+      "cost": 3,
+      "domain_success_path": "data.all_joints_verified",
+      "max_retries": 2,
+      "retry_requires_input_mutation": false,
+      "disallowed_fallbacks": ["web_search"],
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "blender:generate_external_asset": {
+      "name": "blender:generate_external_asset",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": true,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": true,
+      "timeout_seconds": 120,
+      "cost": 8,
+      "domain_success_path": "data.import_ok",
+      "confidence_threshold": 0.3,
+      "max_retries": 1,
+      "retry_requires_input_mutation": true,
+      "disallowed_fallbacks": ["web_search"],
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
+    "search_tools": {
+      "name": "search_tools",
+      "side_effect": "read",
+      "risk_level": "L0",
+      "returns_untrusted": true,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": false,
+      "egress": false,
+      "timeout_seconds": 10,
+      "cost": 1,
+      "allowed_agents": [
+        "endpoint_agent",
+        "cua_agent",
+        "code_refactor_agent",
+        "researcher"
+      ]
+    }
+  }
+}

@@ -9,6 +9,10 @@ import {
   financeApi,
   linksApi,
   projectsApi,
+  researchApi,
+  appsApi,
+  healthApi,
+  improvementsApi,
 } from './index'
 
 describe('API Client Layer', () => {
@@ -44,5 +48,24 @@ describe('API Client Layer', () => {
 
     expect(projectsApi).toBeDefined()
     expect(typeof projectsApi.list).toBe('function')
+
+    expect(researchApi).toBeDefined()
+    expect(typeof researchApi.start).toBe('function')
+    expect(typeof researchApi.getReports).toBe('function')
+    expect(typeof researchApi.getReport).toBe('function')
+    expect(typeof researchApi.getClaims).toBe('function')
+
+    expect(appsApi).toBeDefined()
+    expect(typeof appsApi.list).toBe('function')
+    expect(typeof appsApi.connect).toBe('function')
+    expect(typeof appsApi.disconnect).toBe('function')
+
+    expect(healthApi).toBeDefined()
+    expect(typeof healthApi.getReady).toBe('function')
+
+    expect(improvementsApi).toBeDefined()
+    expect(typeof improvementsApi.list).toBe('function')
+    expect(typeof improvementsApi.approve).toBe('function')
+    expect(typeof improvementsApi.reject).toBe('function')
   })
 })

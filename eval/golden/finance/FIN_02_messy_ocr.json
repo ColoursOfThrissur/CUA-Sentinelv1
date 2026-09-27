@@ -1,0 +1,24 @@
+{
+  "id": "FIN_02",
+  "description": "Messy OCR statement with irregular spacing and noise symbols.",
+  "tags": ["finance", "statement-extraction", "messy"],
+  "risk": "medium",
+  "input": {
+    "prompt": "Extract transactions from noisy OCR bank statement",
+    "workflow": "ENDPOINT"
+  },
+  "context_fixture": "*** ACCT # 9912 ***\n08/20/2026 .. SHELL OIL 1042 .. -$35.00 [AUTH_OK]\n08/22/2026 .. PAYPAL *GITHUB .. -$10.00\nBAL: $540.20",
+  "expected": {
+    "account_last4": "9912",
+    "transaction_count": 2,
+    "transactions": [
+      {"date": "2026-08-20", "amount": -35.00, "merchant": "SHELL OIL 1042"},
+      {"date": "2026-08-22", "amount": -10.00, "merchant": "PAYPAL *GITHUB"}
+    ]
+  },
+  "checks": [
+    "noise symbols stripped from merchant names",
+    "transaction_count == 2",
+    "negative amounts normalized"
+  ]
+}

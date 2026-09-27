@@ -1,8 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BrainCircuit, MessageSquare, ListTodo, Monitor, ShieldCheck, Settings, Landmark, Bookmark, Mail, Bell, Code2, FolderKanban, Sun, Moon } from 'lucide-react'
+import {
+  MessageSquare,
+  Code2,
+  FolderKanban,
+  Microscope,
+  Landmark,
+  Mail,
+  ShieldCheck,
+  ListTodo,
+  Monitor,
+  Sparkles,
+  Plug,
+} from 'lucide-react'
 import { useSentinelStore } from '../store'
 import { tasksApi, hitlApi, settingsApi, chatApi } from '../api'
+import SidebarNav, { NavTab } from '../components/navigation/SidebarNav'
 import TelemetryBar from '../components/telemetry/TelemetryBar'
 import TaskQueue from '../components/tasks/TaskQueue'
 import ChatPanel, { Message } from '../components/chat/ChatPanel'
@@ -14,15 +27,75 @@ import LinksPanel from '../components/links/LinksPanel'
 import GmailTriagePanel from '../components/gmail/GmailTriagePanel'
 import CodingPanel from '../components/coding/CodingPanel'
 import { ProjectsPanel } from '../components/projects/ProjectsPanel'
+import { AppsPanel } from '../components/apps/AppsPanel'
 import NotificationModal from '../components/notifications/NotificationModal'
 import { ErrorBoundary } from '../components/common/ErrorBoundary'
 import './Dashboard.css'
 
-type Tab = 'chat' | 'queue' | 'system' | 'approvals' | 'finance' | 'links' | 'gmail' | 'coding' | 'projects'
+const TAB_CONFIG: Record<
+  NavTab,
+  { section: string; title: string; icon: React.ReactNode }
+> = {
+  chat: {
+    section: 'Core Workspace',
+    title: 'Command Chat & Control Center',
+    icon: <MessageSquare size={15} />,
+  },
+  coding: {
+    section: 'Core Workspace',
+    title: 'Code Refactor & AI Studio',
+    icon: <Code2 size={15} />,
+  },
+  projects: {
+    section: 'Core Workspace',
+    title: 'Projects & Live Apps',
+    icon: <FolderKanban size={15} />,
+  },
+  links: {
+    section: 'Intelligence & Research',
+    title: 'Research & Knowledge Hub',
+    icon: <Microscope size={15} />,
+  },
+  finance: {
+    section: 'Intelligence & Research',
+    title: 'Personal Finance & Portfolio',
+    icon: <Landmark size={15} />,
+  },
+  gmail: {
+    section: 'Intelligence & Research',
+    title: 'Gmail Inbox Triage',
+    icon: <Mail size={15} />,
+  },
+  approvals: {
+    section: 'Operations & Control',
+    title: 'Human-in-the-Loop Approvals',
+    icon: <ShieldCheck size={15} />,
+  },
+  queue: {
+    section: 'Operations & Control',
+    title: 'Autonomous Task Queue',
+    icon: <ListTodo size={15} />,
+  },
+  system: {
+    section: 'Operations & Control',
+    title: 'System Diagnostics & Telemetry',
+    icon: <Monitor size={15} />,
+  },
+  digests: {
+    section: 'Operations & Control',
+    title: 'Daily Industry Digests',
+    icon: <Sparkles size={15} />,
+  },
+  apps: {
+    section: 'Operations & Control',
+    title: 'App Connections & MCP',
+    icon: <Plug size={15} />,
+  },
+}
 
 export default function Dashboard() {
   const { setTasks, setHitlPending, setSystemState, hitlPending } = useSentinelStore()
-  const [activeTab, setActiveTab] = useState<Tab>('chat')
+  const [activeTab, setActiveTab] = useState<NavTab>('chat')
   const [showNotifModal, setShowNotifModal] = useState(false)
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     return (localStorage.getItem('sentinel_theme') as 'dark' | 'light') || 'dark'
@@ -49,6 +122,7 @@ export default function Dashboard() {
   const [chatLoading,   setChatLoading]   = useState(false)
   const [useWeb,        setUseWeb]        = useState(false)
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null)
+  const [selectedTargetApp, setSelectedTargetApp] = useState<string | null>(null)
   const sendInFlightRef = useRef(false)
   const pollInFlightRef = useRef(false)
   const handledTaskIdsRef = useRef<Set<string>>(new Set())
@@ -127,7 +201,7 @@ export default function Dashboard() {
         setMessages((prev) => [...prev, { role: 'assistant', content: 'Chat request timed out. Please try again.', task_id: pendingTaskId }])
         finishPendingTask(pendingTaskId)
       }
-    }, 45000)
+    }, 180000)
 
     return () => {
       clearInterval(pollInterval)
@@ -144,7 +218,7 @@ export default function Dashboard() {
 
     setMessages((prev) => [...prev, { role: 'user', content: userText }])
     try {
-      const resp = await chatApi.send(userText, undefined, useWeb, messages.slice(-8))
+      const resp = await chatApi.send(userText, undefined, useWeb, messages.slice(-8), selectedTargetApp || undefined)
       if (resp.data && resp.data.task_id) {
         setPendingTaskId(resp.data.task_id)
       } else {
@@ -187,138 +261,245 @@ export default function Dashboard() {
     onToggleWeb: setUseWeb,
   }
 
+  const currentTabMeta = TAB_CONFIG[activeTab] || TAB_CONFIG.chat
+
   return (
-    <div className="app-container">
-      <header className="app-header">
-        <div className="header-brand" onClick={() => setActiveTab('chat')} style={{ cursor: 'pointer' }}>
-          <div className="logo-mark">
-            <BrainCircuit size={18} color="#ffffff" />
+    <div className="dashboard-root">
+      {/* Claude Code Console Sidebar with Overlay Expansion */}
+      <SidebarNav
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        hitlPendingCount={hitlPending.length}
+        theme={theme}
+        toggleTheme={toggleTheme}
+        onOpenNotifications={() => setShowNotifModal(true)}
+        onOpenSettings={() => navigate('/settings')}
+        selectedTargetApp={selectedTargetApp}
+        onSelectTargetApp={setSelectedTargetApp}
+      />
+
+      {/* Main Workspace Area (starts at 68px rail, never pushes or jiggles on sidebar expansion) */}
+      <div className="main-workspace-area">
+        {/* Workspace Top Header with Breadcrumbs & Live Telemetry */}
+        <header className="workspace-top-header">
+          <div className="workspace-breadcrumb">
+            <span className="workspace-breadcrumb-section">{currentTabMeta.section}</span>
+            <span className="workspace-breadcrumb-separator">/</span>
+            <span className="workspace-breadcrumb-active">
+              {currentTabMeta.icon}
+              {currentTabMeta.title}
+            </span>
           </div>
-          <div>
-            <div className="header-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              CUA-SENTINEL <span style={{ fontSize: '0.65rem', background: 'rgba(56, 189, 248, 0.2)', color: '#38bdf8', padding: '1px 6px', borderRadius: 4, fontWeight: 700 }}>2.0</span>
+
+          <div className="workspace-header-actions">
+            <div className="telemetry-desktop">
+              <TelemetryBar />
             </div>
-            <div className="header-sub">Autonomous AI Developer & Operating Engine</div>
           </div>
-        </div>
+        </header>
 
-        <div className="header-nav-tabs">
-          <button onClick={() => setActiveTab('chat')} className={`desktop-nav-btn ${activeTab === 'chat' ? 'active' : ''}`}>
-            <MessageSquare size={14} /> Command Chat
-          </button>
-          <button onClick={() => setActiveTab('coding')} className={`desktop-nav-btn ${activeTab === 'coding' ? 'active' : ''}`}>
-            <Code2 size={14} /> Code Refactor & AI Dev
-          </button>
-          <button onClick={() => setActiveTab('projects')} className={`desktop-nav-btn ${activeTab === 'projects' ? 'active' : ''}`}>
-            <FolderKanban size={14} /> Projects & Live Apps
-          </button>
-          <button onClick={() => setActiveTab('finance')} className={`desktop-nav-btn ${activeTab === 'finance' ? 'active' : ''}`}>
-            <Landmark size={14} /> Finance & Portfolio
-          </button>
-          <button onClick={() => setActiveTab('links')} className={`desktop-nav-btn ${activeTab === 'links' ? 'active' : ''}`}>
-            <Bookmark size={14} /> Links & Research
-          </button>
-          <button onClick={() => setActiveTab('gmail')} className={`desktop-nav-btn ${activeTab === 'gmail' ? 'active' : ''}`}>
-            <Mail size={14} /> Gmail Triage
-          </button>
-        </div>
-
-        <div className="header-right">
-          <div className="telemetry-desktop"><TelemetryBar /></div>
-          <button onClick={toggleTheme} className="btn btn-ghost" style={{ padding: '8px 10px', fontSize: '0.82rem' }} title="Toggle Light/Dark Theme">
-            {theme === 'light' ? <Moon size={14} /> : <Sun size={14} />}
-          </button>
-          <button onClick={() => setShowNotifModal(true)} className="btn btn-ghost" style={{ padding: '8px 10px', fontSize: '0.82rem' }} title="Notification Settings">
-            <Bell size={14} />
-          </button>
-          <button onClick={() => navigate('/settings')} className="btn btn-ghost" style={{ padding: '8px 10px', fontSize: '0.82rem' }} title="Settings">
-            <Settings size={14} />
-          </button>
-        </div>
-      </header>
-
-      {/* Main Full-Width & Grid Views */}
-      {activeTab === 'coding' ? (
-        <main style={{ padding: '8px 16px', width: '100%', flex: 1, minHeight: 0, overflow: 'auto' }}>
-          <ErrorBoundary fallbackTitle="Code Refactor"><CodingPanel /></ErrorBoundary>
-        </main>
-      ) : activeTab === 'projects' ? (
-        <main style={{ padding: '8px 16px', width: '100%', flex: 1, minHeight: 0, overflow: 'auto' }}>
-          <ErrorBoundary fallbackTitle="Projects"><ProjectsPanel /></ErrorBoundary>
-        </main>
-      ) : activeTab === 'finance' ? (
-        <main style={{ padding: 16, maxWidth: 1200, margin: '0 auto', width: '100%' }}>
-          <ErrorBoundary fallbackTitle="Finance"><FinancePanel /></ErrorBoundary>
-        </main>
-      ) : activeTab === 'links' ? (
-        <main style={{ padding: 16, maxWidth: 1200, margin: '0 auto', width: '100%' }}>
-          <ErrorBoundary fallbackTitle="Links"><LinksPanel /></ErrorBoundary>
-        </main>
-      ) : activeTab === 'gmail' ? (
-        <main style={{ padding: 16, maxWidth: 1200, margin: '0 auto', width: '100%' }}>
-          <ErrorBoundary fallbackTitle="Gmail Triage"><GmailTriagePanel /></ErrorBoundary>
-        </main>
-      ) : (
-        <main className="main-grid">
-          <aside className="side-column">
-            <ErrorBoundary fallbackTitle="System Status"><SystemStatus /></ErrorBoundary>
-            <ErrorBoundary fallbackTitle="Task Queue"><TaskQueue /></ErrorBoundary>
-          </aside>
-          <section className="center-column">
-            <ErrorBoundary fallbackTitle="Chat"><ChatPanel {...chatProps} /></ErrorBoundary>
-          </section>
-          <aside className="right-column">
-            <ErrorBoundary fallbackTitle="Approvals"><HITLPanel /></ErrorBoundary>
-            <ErrorBoundary fallbackTitle="Digests"><DigestPanel /></ErrorBoundary>
-          </aside>
-        </main>
-      )}
-
-      {/* Mobile: single ChatPanel instance, shown/hidden via CSS — never remounted */}
-      <div className="mobile-stack">
-        <div className="mobile-content">
-          <div className={activeTab === 'chat' ? '' : 'mobile-hidden'}>
-            <ChatPanel {...chatProps} />
-          </div>
-          {activeTab === 'queue'     && <div style={{ display:'flex', flexDirection:'column', gap:12 }}><SystemStatus /><TaskQueue /></div>}
-          {activeTab === 'system'    && <div style={{ display:'flex', flexDirection:'column', gap:12 }}><TelemetryBar mobile /><SystemStatus /></div>}
-          {activeTab === 'approvals' && <div style={{ display:'flex', flexDirection:'column', gap:12 }}><HITLPanel /><DigestPanel /></div>}
-          {activeTab === 'coding'    && <CodingPanel />}
-          {activeTab === 'projects'  && <ProjectsPanel />}
-          {activeTab === 'finance'   && <FinancePanel />}
-          {activeTab === 'links'     && <LinksPanel />}
-          {activeTab === 'gmail'     && <GmailTriagePanel />}
+        {/* Dynamic Workspace Viewport */}
+        <div className="workspace-viewport">
+          {activeTab === 'coding' ? (
+            <div className="full-workspace-fluid">
+              <ErrorBoundary fallbackTitle="Code Studio">
+                <CodingPanel />
+              </ErrorBoundary>
+            </div>
+          ) : activeTab === 'projects' ? (
+            <div className="full-workspace-fluid">
+              <ErrorBoundary fallbackTitle="Projects">
+                <ProjectsPanel />
+              </ErrorBoundary>
+            </div>
+          ) : activeTab === 'links' ? (
+            <div className="full-workspace-container">
+              <ErrorBoundary fallbackTitle="Research & Knowledge Hub">
+                <LinksPanel />
+              </ErrorBoundary>
+            </div>
+          ) : activeTab === 'finance' ? (
+            <div className="full-workspace-container">
+              <ErrorBoundary fallbackTitle="Finance">
+                <FinancePanel />
+              </ErrorBoundary>
+            </div>
+          ) : activeTab === 'gmail' ? (
+            <div className="full-workspace-container">
+              <ErrorBoundary fallbackTitle="Gmail Triage">
+                <GmailTriagePanel />
+              </ErrorBoundary>
+            </div>
+          ) : activeTab === 'approvals' ? (
+            <div className="full-workspace-container" style={{ maxWidth: 960 }}>
+              <ErrorBoundary fallbackTitle="Approvals">
+                <HITLPanel />
+              </ErrorBoundary>
+            </div>
+          ) : activeTab === 'queue' ? (
+            <div className="full-workspace-container" style={{ maxWidth: 960 }}>
+              <ErrorBoundary fallbackTitle="Task Queue">
+                <TaskQueue />
+              </ErrorBoundary>
+            </div>
+          ) : activeTab === 'system' ? (
+            <div className="full-workspace-container" style={{ maxWidth: 960 }}>
+              <ErrorBoundary fallbackTitle="System Diagnostics">
+                <SystemStatus />
+              </ErrorBoundary>
+            </div>
+          ) : activeTab === 'digests' ? (
+            <div className="full-workspace-container" style={{ maxWidth: 1000 }}>
+              <ErrorBoundary fallbackTitle="Daily Digests">
+                <DigestPanel />
+              </ErrorBoundary>
+            </div>
+          ) : activeTab === 'apps' ? (
+            <div className="full-workspace-container" style={{ maxWidth: 1200 }}>
+              <ErrorBoundary fallbackTitle="App Connections & MCP">
+                <AppsPanel />
+              </ErrorBoundary>
+            </div>
+          ) : (
+            /* Default: Command Center Chat & Operations Grid */
+            <main className="main-grid">
+              <aside className="side-column">
+                <ErrorBoundary fallbackTitle="System Status">
+                  <SystemStatus />
+                </ErrorBoundary>
+                <ErrorBoundary fallbackTitle="Task Queue">
+                  <TaskQueue />
+                </ErrorBoundary>
+              </aside>
+              <section className="center-column">
+                <ErrorBoundary fallbackTitle="Chat">
+                  <ChatPanel {...chatProps} />
+                </ErrorBoundary>
+              </section>
+              <aside className="right-column">
+                <ErrorBoundary fallbackTitle="Approvals">
+                  <HITLPanel />
+                </ErrorBoundary>
+                <ErrorBoundary fallbackTitle="Digests">
+                  <DigestPanel />
+                </ErrorBoundary>
+              </aside>
+            </main>
+          )}
         </div>
       </div>
 
-      <nav className="bottom-nav" aria-label="Main navigation">
-        <NavItem icon={<MessageSquare size={20} />} label="Chat"      tab="chat"      active={activeTab} onClick={setActiveTab} />
-        <NavItem icon={<Code2 size={20} />}          label="Coding"    tab="coding"    active={activeTab} onClick={setActiveTab} />
-        <NavItem icon={<FolderKanban size={20} />}   label="Projects"  tab="projects"  active={activeTab} onClick={setActiveTab} />
-        <NavItem icon={<Landmark size={20} />}      label="Finance"   tab="finance"   active={activeTab} onClick={setActiveTab} />
-        <NavItem icon={<Bookmark size={20} />}      label="Links"     tab="links"     active={activeTab} onClick={setActiveTab} />
-        <NavItem icon={<Mail size={20} />}          label="Gmail"     tab="gmail"     active={activeTab} onClick={setActiveTab} />
-        <NavItem icon={<ListTodo size={20} />}      label="Queue"     tab="queue"     active={activeTab} onClick={setActiveTab} />
-        <NavItem icon={<Monitor size={20} />}       label="System"    tab="system"    active={activeTab} onClick={setActiveTab} />
-        <NavItem icon={<ShieldCheck size={20} />}   label="Approvals" tab="approvals" active={activeTab} onClick={setActiveTab} badge={hitlPending.length} />
+      {/* Mobile Bottom Navigation (<768px viewport) */}
+      <nav className="mobile-bottom-nav" aria-label="Mobile Navigation">
+        <MobileNavItem
+          icon={<MessageSquare size={17} />}
+          label="Chat"
+          tab="chat"
+          active={activeTab}
+          onClick={setActiveTab}
+        />
+        <MobileNavItem
+          icon={<Code2 size={17} />}
+          label="Code"
+          tab="coding"
+          active={activeTab}
+          onClick={setActiveTab}
+        />
+        <MobileNavItem
+          icon={<FolderKanban size={17} />}
+          label="Projects"
+          tab="projects"
+          active={activeTab}
+          onClick={setActiveTab}
+        />
+        <MobileNavItem
+          icon={<Microscope size={17} />}
+          label="Research"
+          tab="links"
+          active={activeTab}
+          onClick={setActiveTab}
+        />
+        <MobileNavItem
+          icon={<Landmark size={17} />}
+          label="Finance"
+          tab="finance"
+          active={activeTab}
+          onClick={setActiveTab}
+        />
+        <MobileNavItem
+          icon={<Mail size={17} />}
+          label="Gmail"
+          tab="gmail"
+          active={activeTab}
+          onClick={setActiveTab}
+        />
+        <MobileNavItem
+          icon={<ShieldCheck size={17} />}
+          label="Approvals"
+          tab="approvals"
+          active={activeTab}
+          onClick={setActiveTab}
+          badge={hitlPending.length}
+        />
+        <MobileNavItem
+          icon={<ListTodo size={17} />}
+          label="Queue"
+          tab="queue"
+          active={activeTab}
+          onClick={setActiveTab}
+        />
+        <MobileNavItem
+          icon={<Monitor size={17} />}
+          label="System"
+          tab="system"
+          active={activeTab}
+          onClick={setActiveTab}
+        />
       </nav>
 
+      {/* Centered Notifications & Integrations Modal */}
       {showNotifModal && <NotificationModal onClose={() => setShowNotifModal(false)} />}
     </div>
   )
 }
 
-function NavItem({ icon, label, tab, active, onClick, badge }: {
-  icon: React.ReactNode; label: string; tab: Tab; active: Tab
-  onClick: (t: Tab) => void; badge?: number
+function MobileNavItem({
+  icon,
+  label,
+  tab,
+  active,
+  onClick,
+  badge,
+}: {
+  icon: React.ReactNode
+  label: string
+  tab: NavTab
+  active: NavTab
+  onClick: (t: NavTab) => void
+  badge?: number
 }) {
   return (
-    <button className={`bottom-nav-item ${active === tab ? 'active' : ''}`} onClick={() => onClick(tab)} aria-label={label} aria-current={active === tab ? 'page' : undefined}>
-      <div style={{ position: 'relative' }}>
+    <button
+      type="button"
+      className={`mobile-nav-item ${active === tab ? 'active' : ''}`}
+      onClick={() => onClick(tab)}
+      aria-label={label}
+      aria-current={active === tab ? 'page' : undefined}
+    >
+      <div
+        style={{
+          position: 'relative',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
         {icon}
-        {badge ? <span className="nav-badge">{badge > 9 ? '9+' : badge}</span> : null}
+        {badge && badge > 0 ? (
+          <span className="mobile-nav-badge">{badge > 9 ? '9+' : badge}</span>
+        ) : null}
       </div>
-      {label}
+      <span>{label}</span>
     </button>
   )
 }

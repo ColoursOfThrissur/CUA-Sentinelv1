@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Any
 
 from core.queue import TaskQueue, TaskClaimResult
 from core.model_manager import ModelManager, ModelAdmissionError
@@ -27,10 +27,13 @@ class Scheduler:
         model_manager: ModelManager,
         governance: GovernanceEngine,
         config: dict,
+        mcp_manager: Optional[Any] = None,
     ):
         self.queue = task_queue
         self.model_manager = model_manager
         self.governance = governance
+        self.mcp_manager = mcp_manager
+        self.config = config
         self.poll_interval = config["scheduler"]["poll_interval_sec"]
         self._running = False
         self._current_claim: Optional[TaskClaimResult] = None
@@ -107,12 +110,47 @@ class Scheduler:
             agent = agent_cls(
                 model_manager=self.model_manager,
                 governance=self.governance,
-                config=self.model_manager.__dict__,
+                config=self.config,
             )
+            agent._mcp_manager = self.mcp_manager
 
             result = await agent.run(claim)
+            if isinstance(result, dict):
+                try:
+                    from core.scraper_sanitizer import neutralize_output
+                    allowed_urls = getattr(agent, "allowed_urls", set())
+                    if "response" in result and isinstance(result["response"], str):
+                        result["response"] = neutralize_output(result["response"], allowed_urls=allowed_urls)
+                    if "answer" in result and isinstance(result["answer"], str):
+                        result["answer"] = neutralize_output(result["answer"], allowed_urls=allowed_urls)
+                except Exception as neut_err:
+                    logger.warning(f"Output neutralization warning: {neut_err}")
+
+            # Cancellation is cooperative: an agent can finish its current safe
+            # step after the request arrives. Never overwrite that persisted
+            # cancellation signal with a successful completion.
+            if self.queue.is_cancel_requested(claim.task_id):
+                self.queue.release_task(claim.task_id, claim.lease_id, "CANCELLED")
+                await broadcast_task_update(claim.task_id, "CANCELLED")
+                return
+
             self.queue.release_task(claim.task_id, claim.lease_id, "COMPLETED", result_payload=result)
             await broadcast_task_update(claim.task_id, "COMPLETED", result)
+
+            # Self-Improvement: crystallize execution lessons into memory
+            try:
+                from core.reflection import reflection_engine
+                asyncio.create_task(
+                    reflection_engine.reflect_on_task(
+                        task_id=claim.task_id,
+                        workflow_type=claim.workflow_type,
+                        prompt=prompt,
+                        result_payload=result if isinstance(result, dict) else {},
+                        status="COMPLETED",
+                    )
+                )
+            except Exception as ref_err:
+                logger.debug(f"Task reflection schedule error: {ref_err}")
 
         except asyncio.CancelledError:
             logger.info(f"Task {claim.task_id} cancelled via preemption. Releasing model lease...")
@@ -129,6 +167,26 @@ class Scheduler:
             logger.error(f"Task {claim.task_id} failed: {e}")
             self.queue.release_task(claim.task_id, claim.lease_id, "FAILED", error=str(e))
             await broadcast_task_update(claim.task_id, "FAILED")
+
+    def request_cooperative_preemption(self, timeout_sec: float = 5.0) -> bool:
+        """
+        P0.4 Cooperative Preemption (Section 5.4):
+        Signals the running task to yield cleanly at the next step boundary.
+        The agent checkpoints state and exits without being cut off mid-operation.
+        """
+        if not self._current_claim:
+            return False
+        if self._current_claim.priority == 0:
+            return False
+
+        task_id = self._current_claim.task_id
+        lease_id = self._current_claim.lease_id
+
+        # Mark PREEMPTED in DB so agent's should_yield(task_id) returns True
+        preempted = self.queue.preempt_task(task_id, lease_id)
+        if preempted:
+            logger.info(f"Scheduler: Cooperative preemption signal set for task {task_id}.")
+        return preempted
 
     def request_preemption(self) -> bool:
         """

@@ -64,10 +64,65 @@ function TokenGate({ onUnlock }: { onUnlock: () => void }) {
   )
 }
 
+import { useSentinelStore } from './store'
+import { settingsApi } from './api'
+
+function GlobalEmergencyStopBanner() {
+  const { systemState } = useSentinelStore()
+  const isEmergencyStop = systemState?.emergency_stop === 'true'
+
+  if (!isEmergencyStop) return null
+
+  const handleResume = async () => {
+    try {
+      await settingsApi.resetEmergencyStop()
+      useSentinelStore.getState().setSystemState({ ...systemState, emergency_stop: 'false' })
+    } catch (err) {
+      console.error('Failed to reset emergency stop:', err)
+    }
+  }
+
+  return (
+    <div style={{
+      background: 'linear-gradient(90deg, #991b1b, #dc2626)',
+      color: '#fff',
+      padding: '8px 16px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      fontSize: '0.85rem',
+      fontWeight: 600,
+      zIndex: 9999,
+      boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: '1.1rem' }}>🚨</span>
+        <span>EMERGENCY STOP IS ACTIVE — All autonomous agent tool calls and executions are blocked.</span>
+      </div>
+      <button
+        onClick={handleResume}
+        style={{
+          background: '#10b981',
+          color: '#fff',
+          border: 'none',
+          borderRadius: 4,
+          padding: '5px 14px',
+          fontWeight: 700,
+          fontSize: '0.8rem',
+          cursor: 'pointer',
+        }}
+      >
+        Resume Normal Operations
+      </button>
+    </div>
+  )
+}
+
 function AppRoutes() {
   useWebSocket()
   return (
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <GlobalEmergencyStopBanner />
       <Routes>
         <Route path="/"              element={<Dashboard />} />
         <Route path="/tasks/:taskId" element={<TaskDetail />} />

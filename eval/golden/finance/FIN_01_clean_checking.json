@@ -1,0 +1,25 @@
+{
+  "id": "FIN_01",
+  "description": "Standard clean checking statement with two debit transactions.",
+  "tags": ["finance", "statement-extraction", "clean"],
+  "risk": "low",
+  "input": {
+    "prompt": "Extract transactions from bank statement",
+    "workflow": "ENDPOINT"
+  },
+  "context_fixture": "Statement Date: 2026-09-01\nAccount: 1234-5678 (USD)\n1. 2026-08-15 | Amazon.com | -84.50 USD\n2. 2026-08-18 | Whole Foods | -45.12 USD\nClosing Balance: 1,420.38 USD",
+  "expected": {
+    "account_last4": "5678",
+    "base_currency": "USD",
+    "transaction_count": 2,
+    "transactions": [
+      {"date": "2026-08-15", "amount": -84.50, "currency": "USD", "merchant": "Amazon.com"},
+      {"date": "2026-08-18", "amount": -45.12, "currency": "USD", "merchant": "Whole Foods"}
+    ]
+  },
+  "checks": [
+    "parsed transaction_count == 2",
+    "all amounts extracted with correct negative sign",
+    "currency code USD recognized"
+  ]
+}

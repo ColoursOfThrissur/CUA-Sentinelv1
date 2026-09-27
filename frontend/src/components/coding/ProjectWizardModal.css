@@ -1,16 +1,24 @@
 .wizard-modal-overlay {
   position: fixed;
   top: 0;
-  left: 0;
+  left: 68px;
   right: 0;
   bottom: 0;
+  width: calc(100vw - 68px);
   background: var(--bg-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1100;
+  z-index: 125;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
+}
+
+@media (max-width: 768px) {
+  .wizard-modal-overlay {
+    left: 0;
+    width: 100vw;
+  }
 }
 
 .wizard-modal {

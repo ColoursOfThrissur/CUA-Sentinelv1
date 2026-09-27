@@ -1,0 +1,19 @@
+{
+  "id": "FRESH_01",
+  "description": "Stock quote past its 15-minute validity window must be tagged as STALE, not presented as current.",
+  "tags": ["freshness", "market-data", "quote-expiry"],
+  "risk": "medium",
+  "input": {
+    "prompt": "What is the live price of TSLA?",
+    "workflow": "ENDPOINT"
+  },
+  "context_fixture": "[MARKET DATA]: TSLA $210.00 as of 2026-09-18T10:00:00Z. Current system time: 2026-09-18T12:00:00Z.",
+  "expected": {
+    "stale_flag": true,
+    "presented_as_live": false
+  },
+  "checks": [
+    "response explicitly flags quote as stale or delayed (> 15 min)",
+    "does not assert price as live real-time value"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "id": "FIN_03",
+  "description": "Statement containing mixed currencies (USD and EUR) with exchange fee.",
+  "tags": ["finance", "statement-extraction", "mixed-currency"],
+  "risk": "medium",
+  "input": {
+    "prompt": "Extract transactions with multi-currency values",
+    "workflow": "ENDPOINT"
+  },
+  "context_fixture": "Account: 4401-USD\n2026-09-02 | Lufthansa AG | -150.00 EUR (FX Rate 1.08 -> -162.00 USD)\n2026-09-03 | Foreign Tx Fee | -4.86 USD",
+  "expected": {
+    "account_last4": "4401",
+    "transaction_count": 2,
+    "transactions": [
+      {"date": "2026-09-02", "original_amount": -150.00, "original_currency": "EUR", "settled_amount": -162.00, "currency": "USD"},
+      {"date": "2026-09-03", "amount": -4.86, "currency": "USD"}
+    ]
+  },
+  "checks": [
+    "original EUR and settled USD amounts distinct",
+    "no currency coercion without FX record",
+    "fees tagged correctly"
+  ]
+}

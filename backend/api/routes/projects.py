@@ -117,8 +117,8 @@ async def fulfill_spec(project_id: str, request: Request):
         try:
             with open(spec_path, "r", encoding="utf-8") as f:
                 spec_content = f.read()
-        except Exception:
-            pass
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read spec file: {e}")
 
     task_id = None
     if hasattr(request.app.state, "task_queue") and request.app.state.task_queue:

@@ -1,7 +1,22 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
-import { ArrowLeft, Download, Send, ChevronDown, ChevronRight, Activity, MessageSquare, Bot, User } from 'lucide-react'
+import {
+  ArrowLeft,
+  Download,
+  Send,
+  ChevronDown,
+  ChevronRight,
+  Activity,
+  MessageSquare,
+  Bot,
+  User,
+  FileText,
+  Copy,
+  Check,
+  X,
+  Loader2,
+} from 'lucide-react'
 import { tasksApi, chatApi, modelsApi } from '../api'
 import './TaskDetail.css'
 
@@ -13,6 +28,13 @@ export default function TaskDetail() {
   const [replying, setReplying]     = useState(false)
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({})
   const [activeModelTag, setActiveModelTag] = useState<string>('qwen3:14b-q4_K_M')
+
+  // Execution Report Modal state
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false)
+  const [reportContent, setReportContent] = useState<string>('')
+  const [reportLoading, setReportLoading] = useState(false)
+  const [reportError, setReportError] = useState<string | null>(null)
+  const [copiedReport, setCopiedReport] = useState(false)
 
   useEffect(() => {
     modelsApi.getActive().then(r => {
@@ -75,6 +97,32 @@ export default function TaskDetail() {
     }
   }
 
+  const handleOpenReport = async () => {
+    if (!taskId) return
+    setIsReportModalOpen(true)
+    setReportLoading(true)
+    setReportError(null)
+    try {
+      const res = await tasksApi.getReport(taskId)
+      setReportContent(typeof res.data === 'string' ? res.data : JSON.stringify(res.data, null, 2))
+    } catch (err: any) {
+      setReportError(err?.response?.data?.detail || err?.message || 'Failed to load execution report')
+    } finally {
+      setReportLoading(false)
+    }
+  }
+
+  const handleCopyReport = async () => {
+    if (!reportContent) return
+    try {
+      await navigator.clipboard.writeText(reportContent)
+      setCopiedReport(true)
+      setTimeout(() => setCopiedReport(false), 2000)
+    } catch {
+      // fallback
+    }
+  }
+
   return (
     <div className="task-detail-page animate-fade-in">
       <div className="task-detail-container">
@@ -89,14 +137,26 @@ export default function TaskDetail() {
             </button>
           </div>
           {taskId && (
-            <a
-              href={`/api/tasks/${taskId}/report`}
-              target="_blank"
-              rel="noreferrer"
-              className="btn btn-primary"
-              style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: 6, textDecoration: 'none' }}>
-              <Download size={14} /> Download Report (.md)
-            </a>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={handleOpenReport}
+                className="btn btn-ghost"
+                style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: 6 }}
+                title="View Markdown Report in Modal"
+              >
+                <FileText size={14} color="var(--c-cyan)" /> View Full Report
+              </button>
+              <a
+                href={`/api/tasks/${taskId}/report`}
+                target="_blank"
+                rel="noreferrer"
+                className="btn btn-primary"
+                style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: 6, textDecoration: 'none' }}
+              >
+                <Download size={14} /> Download (.md)
+              </a>
+            </div>
           )}
         </div>
 
@@ -288,6 +348,89 @@ export default function TaskDetail() {
           </div>
         )}
       </div>
+
+      {/* Execution Report Modal */}
+      {isReportModalOpen && (
+        <div className="task-report-modal-overlay" onClick={() => setIsReportModalOpen(false)}>
+          <div className="task-report-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="task-report-modal-header">
+              <div className="task-report-modal-title">
+                <FileText size={18} color="var(--c-cyan)" />
+                <div>
+                  <h2>Task Execution & Research Report</h2>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+                    Task #{taskId?.slice(0, 8)} • {String(task.title || 'Untitled Task')}
+                  </span>
+                </div>
+              </div>
+
+              <div className="task-report-modal-actions">
+                {reportContent && (
+                  <button
+                    type="button"
+                    onClick={handleCopyReport}
+                    className="btn btn-ghost"
+                    style={{ fontSize: '0.75rem', padding: '5px 10px' }}
+                    title="Copy Markdown to Clipboard"
+                  >
+                    {copiedReport ? <Check size={13} color="var(--c-green)" /> : <Copy size={13} />}
+                    {copiedReport ? 'Copied!' : 'Copy'}
+                  </button>
+                )}
+                {taskId && (
+                  <a
+                    href={`/api/tasks/${taskId}/report`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn btn-primary"
+                    style={{ fontSize: '0.75rem', padding: '5px 10px', textDecoration: 'none' }}
+                  >
+                    <Download size={13} /> Download
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setIsReportModalOpen(false)}
+                  className="btn btn-ghost"
+                  style={{ padding: '6px' }}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            <div className="task-report-modal-body">
+              {reportLoading ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 0', gap: 12 }}>
+                  <Loader2 size={24} className="animate-spin" color="var(--c-cyan)" />
+                  <span style={{ fontSize: '0.84rem', color: 'var(--text-dim)' }}>Fetching report artifact...</span>
+                </div>
+              ) : reportError ? (
+                <div className="error-banner">{reportError}</div>
+              ) : reportContent ? (
+                <div className="task-report-markdown">
+                  <ReactMarkdown>{reportContent}</ReactMarkdown>
+                </div>
+              ) : (
+                <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-dim)', fontSize: '0.84rem' }}>
+                  No report artifact generated for this task yet.
+                </div>
+              )}
+            </div>
+
+            <div className="task-report-modal-footer">
+              <button
+                type="button"
+                onClick={() => setIsReportModalOpen(false)}
+                className="btn btn-secondary"
+                style={{ fontSize: '0.78rem', padding: '6px 14px' }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

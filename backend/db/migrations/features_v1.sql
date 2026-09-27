@@ -54,3 +54,35 @@ CREATE TABLE IF NOT EXISTS web_crawl_sessions (
     extracted_facts TEXT DEFAULT '[]',
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
+
+-- Dependency changes are planned and approved separately from execution.
+-- No package-manager command is invoked by this table or its repository.
+CREATE TABLE IF NOT EXISTS dependency_change_plans (
+    plan_id TEXT PRIMARY KEY,
+    project_path TEXT NOT NULL,
+    ecosystem TEXT NOT NULL CHECK(ecosystem IN ('pip', 'npm')),
+    package_name TEXT NOT NULL,
+    requested_spec TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(evidence_json)),
+    manifest_path TEXT NOT NULL,
+    lockfile_path TEXT,
+    manifest_before_hash TEXT,
+    lockfile_before_hash TEXT,
+    command_json TEXT NOT NULL CHECK(json_valid(command_json)),
+    risk_level TEXT NOT NULL DEFAULT 'L2' CHECK(risk_level = 'L2'),
+    plan_hash TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'PLANNED' CHECK(status IN (
+        'PLANNED', 'AWAITING_APPROVAL', 'APPROVED', 'EXECUTING',
+        'SUCCEEDED', 'FAILED', 'REJECTED', 'EXPIRED'
+    )),
+    result_json TEXT CHECK(result_json IS NULL OR json_valid(result_json)),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    approved_at TEXT,
+    executed_at TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_dependency_plans_status_expiry
+    ON dependency_change_plans(status, expires_at);

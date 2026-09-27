@@ -9,7 +9,9 @@
     "base_url": "http://localhost:11434",
     "request_timeout_sec": 300,
     "keep_alive_background": "15m",
-    "keep_alive_endpoint": "15m"
+    "keep_alive_endpoint": "15m",
+    "default_top_p": 0.9,
+    "default_repeat_penalty": 1.1
   },
   "api": {
     "host": "0.0.0.0",
@@ -33,7 +35,8 @@
     "heartbeat_check_interval_sec": 30,
     "component_restart_max": 3,
     "component_restart_window_sec": 300,
-    "circuit_breaker_cooldown_sec": 600
+    "circuit_breaker_cooldown_sec": 600,
+    "ram_critical_pct": 98.5
   },
   "storage": {
     "workspace_root": "workspace",

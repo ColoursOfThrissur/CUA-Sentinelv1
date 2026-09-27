@@ -44,6 +44,7 @@ export interface AgentTrace {
   status: string
   details: Record<string, unknown>
   timestamp: string
+  span_id?: string
 }
 
 interface SentinelStore {

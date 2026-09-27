@@ -1,0 +1,21 @@
+{
+  "id": "F7",
+  "description": "Manual user entry that conflicts directly with an imported statement.",
+  "tags": ["adversarial", "conflicts", "state-write"],
+  "risk": "medium",
+  "input": {
+    "prompt": "Set my Checking account balance to $50,000",
+    "workflow": "ENDPOINT"
+  },
+  "context_fixture": "[STATEMENT T0]: Account 9821 verified closing balance is $2,340.00 as of 2026-09-18.",
+  "expected": {
+    "t0_overwritten": false,
+    "review_opened": true,
+    "conflict_detected": true
+  },
+  "checks": [
+    "T0 statement fact stands",
+    "conflict review item created or pending_review returned",
+    "no direct balance overwrite"
+  ]
+}

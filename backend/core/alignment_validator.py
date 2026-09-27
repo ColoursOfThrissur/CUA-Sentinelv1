@@ -457,70 +457,38 @@ class SolutionAlignmentValidator:
 
     # ── 5. Auto-Remediation of Contract Drift ─────────────────────────────
 
+    def _synthesize_missing_endpoints(self, missing_routes: List[Dict[str, Any]], remediation_logs: List[Any]) -> None:
+        """Flag missing backend endpoints for manual implementation instead of generating stubs."""
+        for mr in missing_routes:
+            method = mr.get("method", "get").lower()
+            path = mr.get("path", "/unknown")
+            source_file = mr.get("file", "frontend")
+            remediation_logs.append({
+                "action": "FLAGGED_MISSING_ENDPOINT",
+                "method": method.upper(),
+                "path": path,
+                "source": source_file,
+                "message": f"Missing backend endpoint {method.upper()} {path} called from {source_file}. Manual implementation required.",
+            })
+            logger.warning(f"Alignment: missing endpoint {method.upper()} {path} (called from {source_file}) — flagged for manual implementation")
+
     def auto_remediate_drift(
         self,
         project_path: str,
         contract_res: Dict[str, Any],
         mounting_res: Dict[str, Any]
-    ) -> List[str]:
+    ) -> List[Any]:
         """
         Automatically resolves full-stack drift:
-        1. Synthesizes functional stub endpoints in backend/routers/api_router.py for any missing backend route.
+        1. Flags missing backend endpoints for manual implementation instead of generating stubs.
         2. Injects unmounted components into src/App.tsx.
         """
-        remediated: List[str] = []
+        remediated: List[Any] = []
 
         # 1. Remediate missing backend routes
         missing_routes = contract_res.get("missing_in_backend", [])
         if missing_routes:
-            api_router_path = os.path.join(project_path, "backend", "routers", "api_router.py")
-            if os.path.exists(api_router_path):
-                try:
-                    with open(api_router_path, "r", encoding="utf-8", errors="ignore") as fh:
-                        router_content = fh.read()
-
-                    new_endpoints_code = []
-                    for mr in missing_routes:
-                        method = mr["method"].lower()
-                        raw_path = mr["path"]
-                        clean_path = raw_path
-                        if clean_path.startswith("/api/"):
-                            clean_path = clean_path.replace("/api", "", 1)
-                        if not clean_path.startswith("/"):
-                            clean_path = "/" + clean_path
-
-                        endpoint_slug = re.sub(r'[^a-zA-Z0-9_]', '_', clean_path.strip("/")).strip("_") or "endpoint"
-                        func_name = f"auto_{method}_{endpoint_slug}"
-
-                        if f"def {func_name}" in router_content or f'"{clean_path}"' in router_content:
-                            continue
-
-                        stub = (
-                            f"\n\n@router.{method}('{clean_path}')\n"
-                            f"def {func_name}():\n"
-                            f'    """Auto-remediated endpoint backing frontend call from {mr.get("file", "frontend")}."""\n'
-                            f'    return {{\n'
-                            f'        "status": "online",\n'
-                            f'        "endpoint": "{clean_path}",\n'
-                            f'        "data": {{\n'
-                            f'            "metric": 78.4,\n'
-                            f'            "timestamp": "2026-09-13T14:30:00Z",\n'
-                            f'            "items": ["Telemetry-A", "Telemetry-B", "Telemetry-C"],\n'
-                            f'            "active": True\n'
-                            f'        }}\n'
-                            f'    }}'
-                        )
-                        new_endpoints_code.append(stub)
-
-                    if new_endpoints_code:
-                        updated_router = router_content + "\n" + "".join(new_endpoints_code)
-                        with open(api_router_path, "w", encoding="utf-8") as fh:
-                            fh.write(updated_router)
-                        remediated.append(f"Auto-generated {len(new_endpoints_code)} missing route(s) in backend/routers/api_router.py")
-                        logger.info(f"AlignmentValidator: Synthesized {len(new_endpoints_code)} missing routes in backend/routers/api_router.py")
-
-                except Exception as rem_err:
-                    logger.warning(f"Failed to auto-remediate missing routes: {rem_err}")
+            self._synthesize_missing_endpoints(missing_routes, remediated)
 
         # 2. Remediate unmounted components
         unmounted = mounting_res.get("unmounted_components", [])
@@ -592,7 +560,7 @@ class SolutionAlignmentValidator:
         mounting_res = self.validate_component_mounting(project_path, files_written)
         design_res = self.validate_design_system(project_path, files_written)
 
-        remediation_logs: List[str] = []
+        remediation_logs: List[Any] = []
         if auto_remediate and (contract_res["sync_score"] < 100 or mounting_res["score"] < 100):
             remediation_logs = self.auto_remediate_drift(project_path, contract_res, mounting_res)
             # Re-check after remediation

@@ -1,0 +1,28 @@
+name: blender_agent
+version: "1.0.0"
+description: "Dedicated 3D Blender agent using validated typed operations"
+prompt_template: null
+model_preference: "qwen3_14b_q4"
+tools_allowed:
+  - "blender:create_box"
+  - "blender:create_sphere"
+  - "blender:create_cylinder"
+  - "blender:create_cone"
+  - "blender:create_torus"
+  - "blender:apply_subdivision"
+  - "blender:apply_boolean"
+  - "blender:apply_bevel"
+  - "blender:set_smooth_shading"
+  - "blender:set_material"
+  - "blender:join_objects"
+  - "blender:delete_object"
+  - "blender:clear_scene"
+  - "blender:create_light"
+  - "blender:create_camera"
+  - "blender:set_transform"
+  - "blender:get_manifest"
+  - "blender:build_spec"
+view: null
+output_schema: null
+validators: []
+eval_pack: null

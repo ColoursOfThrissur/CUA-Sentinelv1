@@ -14,6 +14,7 @@ import subprocess
 from typing import Dict, Any, List, Set
 from pathlib import Path
 from core.path_security import path_security
+from core.project_environment_service import ProjectEnvironmentService, project_environment_service
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +61,7 @@ PYTHON_MODULE_TO_PYPI_NAME = {
     "distutils": "setuptools"
 }
 
-class EnvironmentEngine:
-    def __init__(self):
-        pass
-
+class EnvironmentEngine(ProjectEnvironmentService):
     def get_python_venv_executables(self, project_path: str) -> Dict[str, str]:
         import sys
         venv_dirs = [".venv", "venv"]
@@ -217,6 +215,85 @@ class EnvironmentEngine:
             if "requirements.txt" in files:
                 found.append(os.path.join(root, "requirements.txt"))
         return found
+
+    def scan_missing_dependencies(self, project_path: str) -> List[Any]:
+        """
+        Scans project code for missing npm and Python dependencies.
+        Creates immutable, reviewable DependencyChangePlans without invoking package managers directly.
+        """
+        from core.dependency_plans import dependency_plan_builder
+        plans = []
+        if not os.path.exists(project_path):
+            return plans
+
+        # 1. Discover missing npm packages
+        pkg_dirs = self._find_package_jsons(project_path)
+        for pkg_dir in pkg_dirs:
+            package_json_path = os.path.join(pkg_dir, "package.json")
+            try:
+                with open(package_json_path, "r", encoding="utf-8") as f:
+                    pkg_data = json.load(f)
+                existing_deps = (
+                    set(pkg_data.get("dependencies", {}).keys()) |
+                    set(pkg_data.get("devDependencies", {}).keys())
+                )
+                imported_npm = self.scan_js_ts_imports(pkg_dir)
+                node_modules_dir = os.path.join(pkg_dir, "node_modules")
+                missing_npm = [
+                    p for p in imported_npm
+                    if p not in existing_deps or not os.path.exists(os.path.join(node_modules_dir, p))
+                ]
+                for pkg_name in missing_npm:
+                    try:
+                        plan = dependency_plan_builder.create_plan(
+                            project_path=project_path,
+                            ecosystem="npm",
+                            package_name=pkg_name,
+                            requested_spec=pkg_name,
+                            reason=f"Detected import of '{pkg_name}' missing from {package_json_path}",
+                            manifest_path=package_json_path,
+                            evidence=[{"source": "scan_js_ts_imports", "manifest": package_json_path}],
+                        )
+                        plans.append(plan)
+                    except Exception as plan_err:
+                        logger.warning(f"Could not build dependency plan for npm pkg '{pkg_name}': {plan_err}")
+            except Exception as e:
+                logger.warning(f"Error scanning package.json at {package_json_path}: {e}")
+
+        # 2. Discover missing Python packages
+        req_files = self._find_requirements_txts(project_path)
+        imported_py = self.scan_python_imports(project_path)
+        for req_path in req_files:
+            try:
+                with open(req_path, "r", encoding="utf-8") as f:
+                    existing_lines = f.read().splitlines()
+                existing_pip = set()
+                for line in existing_lines:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        pkg = re.split(r"[=><~!]", line)[0].strip()
+                        if pkg:
+                            existing_pip.add(pkg.lower())
+
+                missing_pip = [p for p in imported_py if p.lower() not in existing_pip]
+                for pkg_name in missing_pip:
+                    try:
+                        plan = dependency_plan_builder.create_plan(
+                            project_path=project_path,
+                            ecosystem="pip",
+                            package_name=pkg_name,
+                            requested_spec=pkg_name,
+                            reason=f"Detected Python AST import of '{pkg_name}' missing from {req_path}",
+                            manifest_path=req_path,
+                            evidence=[{"source": "scan_python_imports", "manifest": req_path}],
+                        )
+                        plans.append(plan)
+                    except Exception as plan_err:
+                        logger.warning(f"Could not build dependency plan for pip pkg '{pkg_name}': {plan_err}")
+            except Exception as e:
+                logger.warning(f"Error scanning requirements.txt at {req_path}: {e}")
+
+        return plans
 
     def scan_and_install_dependencies(self, project_path: str) -> Dict[str, Any]:
         """
@@ -798,48 +875,149 @@ export default function {target_file_basename}(props: any) {{
         """
         Installs a single missing Python (pip) or Node (npm) package into the project environment
         and updates the corresponding manifest file (requirements.txt or package.json).
+
+        Version pinning strategy (prevents auto-remediation from introducing breaking changes):
+        1. If requirements.txt has a pinned version for this package, use it (e.g. requests==2.32.3).
+        2. If the package is already installed in the venv, pin to that version.
+        3. Only fall back to unpinned install if neither is available — logs a warning.
         """
         if not package_name or not os.path.exists(project_path):
             return {"success": False, "error": f"Invalid project or package: {package_name}"}
 
         path_security.validate_write_permission(project_path)
-        logger.info(f"EnvironmentEngine: Auto-installing missing {ecosystem} package '{package_name}' in {project_path}...")
 
-        # Translate import name to PyPI name if python
         if ecosystem == "pip":
             package_name = PYTHON_MODULE_TO_PYPI_NAME.get(package_name.lower(), package_name)
             self.setup_python_virtualenv(project_path)
             execs = self.get_python_venv_executables(project_path)
-            pip_cmd = execs["pip"]
-            cmd = f'{pip_cmd} install "{package_name}"'
+            pip_exe = execs["pip"]
+            py_exe = execs["python"]
+
+            # --- Version pinning: check requirements.txt first ---
+            pinned_version = self._find_pinned_version(project_path, package_name)
+
+            if not pinned_version:
+                # Check if already installed in venv — pin to current version
+                try:
+                    freeze = subprocess.run(
+                        f'"{py_exe}" -m pip show {package_name}',
+                        shell=True, capture_output=True, text=True, timeout=15
+                    )
+                    if freeze.returncode == 0:
+                        for line in freeze.stdout.splitlines():
+                            if line.startswith("Version:"):
+                                pinned_version = f"{package_name}=={line.split(':', 1)[1].strip()}"
+                                break
+                except Exception:
+                    pass
+
+            if pinned_version:
+                install_spec = pinned_version
+                logger.info(f"EnvironmentEngine: Installing pinned '{install_spec}'")
+            else:
+                install_spec = package_name
+                logger.warning(
+                    f"EnvironmentEngine: No pinned version found for '{package_name}' — "
+                    "installing latest. Consider adding it to requirements.txt with a version pin."
+                )
+
+            cmd = f'{pip_exe} install "{install_spec}"'
             res = subprocess.run(cmd, shell=True, cwd=project_path, capture_output=True, text=True, timeout=180)
             success = res.returncode == 0
             if success:
+                # Append to requirements.txt with the pinned spec if not already present
                 root_req = os.path.join(project_path, "requirements.txt")
-                try:
-                    mode = "a" if os.path.exists(root_req) else "w"
-                    with open(root_req, mode, encoding="utf-8") as f:
-                        f.write(f"\n{package_name}")
-                except Exception as req_err:
-                    logger.warning(f"Could not update requirements.txt during auto-install: {req_err}")
+                if pinned_version and pinned_version != package_name:
+                    self._append_to_requirements(root_req, pinned_version)
+                elif not pinned_version:
+                    # Get the version that was just installed and pin it
+                    try:
+                        show = subprocess.run(
+                            f'"{py_exe}" -m pip show {package_name}',
+                            shell=True, capture_output=True, text=True, timeout=15
+                        )
+                        for line in show.stdout.splitlines():
+                            if line.startswith("Version:"):
+                                installed_ver = line.split(":", 1)[1].strip()
+                                self._append_to_requirements(root_req, f"{package_name}=={installed_ver}")
+                                break
+                    except Exception:
+                        self._append_to_requirements(root_req, package_name)
+
             return {
                 "success": success,
-                "package": package_name,
+                "package": install_spec,
                 "ecosystem": "pip",
-                "log": res.stdout[:800] if success else (res.stderr[:800] or res.stdout[:800] or "pip install failed")
+                "pinned": bool(pinned_version),
+                "log": res.stdout[:800] if success else (res.stderr[:800] or res.stdout[:800] or "pip install failed"),
             }
 
         elif ecosystem == "npm":
-            cmd = f'npm install {package_name} --save'
+            # For npm, respect package.json version if present
+            pkg_json_path = os.path.join(project_path, "package.json")
+            pinned_npm = None
+            try:
+                with open(pkg_json_path, "r", encoding="utf-8") as f:
+                    pkg_data = json.load(f)
+                for section in ("dependencies", "devDependencies"):
+                    if package_name in pkg_data.get(section, {}):
+                        pinned_npm = f"{package_name}@{pkg_data[section][package_name]}"
+                        break
+            except Exception:
+                pass
+
+            install_spec = pinned_npm or package_name
+            if not pinned_npm:
+                logger.warning(
+                    f"EnvironmentEngine: No pinned version in package.json for '{package_name}' — "
+                    "installing latest."
+                )
+
+            cmd = f"npm install {install_spec} --save"
             res = subprocess.run(cmd, shell=True, cwd=project_path, capture_output=True, text=True, timeout=180)
-            success = res.returncode == 0
             return {
-                "success": success,
-                "package": package_name,
+                "success": res.returncode == 0,
+                "package": install_spec,
                 "ecosystem": "npm",
-                "log": res.stdout[:800] if success else (res.stderr[:800] or res.stdout[:800] or "npm install failed")
+                "pinned": bool(pinned_npm),
+                "log": res.stdout[:800] if res.returncode == 0 else (res.stderr[:800] or "npm install failed"),
             }
 
         return {"success": False, "error": f"Unknown ecosystem: {ecosystem}"}
+
+    def _find_pinned_version(self, project_path: str, package_name: str) -> str:
+        """Search all requirements.txt files for a pinned version of package_name."""
+        req_files = self._find_requirements_txts(project_path)
+        pkg_lower = package_name.lower()
+        for req_path in req_files:
+            try:
+                with open(req_path, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        # Match "requests==2.32.3", "requests>=2.28", "requests~=2.32"
+                        base = re.split(r"[=<>!~;@]", line)[0].strip().lower()
+                        if base == pkg_lower or base == pkg_lower.replace("-", "_"):
+                            return line  # return full spec with version constraint
+            except Exception:
+                pass
+        return ""
+
+    @staticmethod
+    def _append_to_requirements(req_path: str, spec: str) -> None:
+        """Append spec to requirements.txt only if not already present."""
+        try:
+            existing = ""
+            if os.path.exists(req_path):
+                with open(req_path, "r", encoding="utf-8") as f:
+                    existing = f.read()
+            base = re.split(r"[=<>!~;@]", spec)[0].strip().lower()
+            if base not in existing.lower():
+                mode = "a" if os.path.exists(req_path) else "w"
+                with open(req_path, mode, encoding="utf-8") as f:
+                    f.write(f"\n{spec}")
+        except Exception as e:
+            logger.warning(f"Could not update requirements.txt with '{spec}': {e}")
 
 environment_engine = EnvironmentEngine()

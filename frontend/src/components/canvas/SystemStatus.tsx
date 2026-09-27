@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useSentinelStore } from '../../store'
-import { settingsApi } from '../../api'
-import { Activity } from 'lucide-react'
+import { settingsApi, healthApi, HealthReadyResponse } from '../../api'
+import { Activity, Database, Cpu } from 'lucide-react'
 import { TelemetryHistoryModal } from '../telemetry/TelemetryHistoryModal'
 import './SystemStatus.css'
 
@@ -11,11 +11,21 @@ export default function SystemStatus() {
   const navigate = useNavigate()
   const [autoHeal, setAutoHeal] = useState(true)
   const [showHistory, setShowHistory] = useState(false)
+  const [healthReady, setHealthReady] = useState<HealthReadyResponse | null>(null)
 
   useEffect(() => {
     settingsApi.getPreferences().then(r => {
       if (r.data?.auto_heal !== undefined) setAutoHeal(r.data.auto_heal)
     })
+
+    const pollHealth = () => {
+      healthApi.getReady().then(r => setHealthReady(r.data)).catch(() => {
+        setHealthReady(prev => prev ? { ...prev, status: 'not_ready' } : null)
+      })
+    }
+    pollHealth()
+    const timer = setInterval(pollHealth, 15000)
+    return () => clearInterval(timer)
   }, [])
 
   const safeMode      = systemState?.safe_mode === 'true'
@@ -28,6 +38,18 @@ export default function SystemStatus() {
       await settingsApi.setSafeMode(!safeMode)
     } catch (err) {
       console.error('Failed to toggle safe mode:', err)
+    }
+  }
+
+  const handleResetEmergencyStop = async () => {
+    try {
+      await settingsApi.resetEmergencyStop()
+      useSentinelStore.getState().setSystemState({
+        safe_mode: systemState?.safe_mode || 'false',
+        emergency_stop: 'false',
+      })
+    } catch (err) {
+      console.error('Failed to reset emergency stop:', err)
     }
   }
 
@@ -63,10 +85,43 @@ export default function SystemStatus() {
           </div>
         </div>
         {emergencyStop && (
-          <div className="status-row">
-            <span className="status-row-label">Emergency Stop</span>
-            <span className="pill pill-danger">ACTIVE</span>
+          <div className="status-row" style={{ background: 'rgba(239, 68, 68, 0.15)', padding: '6px 8px', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span className="status-row-label" style={{ color: '#ef4444', fontWeight: 600 }}>Emergency Stop</span>
+            <button
+              onClick={handleResetEmergencyStop}
+              className="btn btn-success"
+              style={{ fontSize: '0.68rem', padding: '2px 8px', height: 'auto', background: '#10b981', color: '#fff', border: 'none', cursor: 'pointer', borderRadius: 4, fontWeight: 700 }}
+              title="Click to clear emergency stop and resume normal operations"
+            >
+              Resume Normal
+            </button>
           </div>
+        )}
+        {healthReady && (
+          <>
+            <div
+              className="status-row"
+              title={`SQLite Databases: operational=${healthReady.databases.operational}, audit=${healthReady.databases.audit}, knowledge=${healthReady.databases.knowledge}`}
+            >
+              <span className="status-row-label" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <Database size={11} color="var(--text-faint)" /> Databases
+              </span>
+              <span className={`pill ${healthReady.status === 'ready' ? 'pill-good' : 'pill-danger'}`} style={{ fontSize: '0.68rem', padding: '2px 7px' }}>
+                {healthReady.status === 'ready' ? '3/3 WAL' : 'Degraded'}
+              </span>
+            </div>
+            <div className="status-row">
+              <span className="status-row-label" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <Cpu size={11} color="var(--text-faint)" /> Local LLM
+              </span>
+              <span
+                className={`pill ${healthReady.model_runtime === 'reachable' ? 'pill-good' : 'pill-warn'}`}
+                style={{ fontSize: '0.68rem', padding: '2px 7px' }}
+              >
+                {healthReady.model_runtime === 'reachable' ? 'Ollama Live' : 'Ollama Offline'}
+              </span>
+            </div>
+          </>
         )}
       </div>
 

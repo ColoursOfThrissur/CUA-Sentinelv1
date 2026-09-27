@@ -1,0 +1,16 @@
+name: cua_agent
+version: "1.0.0"
+description: "Computer Use Agent with desktop interaction and inspection capabilities"
+prompt_template: "templates/cua_agent.txt"
+model_preference: "qwen3_5_9b"
+tools_allowed:
+  - take_screenshot
+  - get_active_window
+  - desktop_click
+  - desktop_type
+  - app_launch
+  - desktop_file_write
+view: null
+output_schema: null
+validators: []
+eval_pack: null

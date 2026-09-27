@@ -1,78 +1,235 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-/* ─── Design tokens (Obsidian Dark Theme Default) ─────────────── */
-:root {
-  --c-cyan:         #38bdf8;
-  --c-cyan-dim:     rgba(56,189,248,0.85);
-  --c-cyan-soft:    rgba(186,230,253,0.9);
-  --c-indigo:       #6366f1;
-  --c-purple:       #a855f7;
-  --c-green:        #34d399;
-  --c-yellow:       #fbbf24;
-  --c-red:          #f87171;
-  --c-orange:       #fb923c;
-  --c-slate:        #64748b;
+/* ═══════════════════════════════════════════════════════════
+   DARK THEME — BFSI Institutional
+   Canvas: #0A0F1E  (deep navy-black, not pitch black)
+   Card:   #111827  (dark navy-slate, glass layer on top)
+   Primary interactive: TCS Blue #477AC6
+   AI accent: TCS Turquoise #12C6B3
+   Financial positive: #22C55E (data only, not chrome)
+═══════════════════════════════════════════════════════════ */
+:root, [data-theme="dark"], body.theme-dark {
+  /* Canvas layers */
+  --bg-canvas:          #0A0F1E;
+  --bg-primary:         rgba(255, 255, 255, 0.025);
+  --bg-secondary:       rgba(255, 255, 255, 0.045);
+  --bg-tertiary:        rgba(255, 255, 255, 0.065);
+  --bg-elevated:        #131C2E;
+  --bg-card-solid:      #111827;
 
-  --bg-page:        #090d16;
-  --bg-surface:     rgba(15, 23, 42, 0.78);
-  --bg-surface-lo:  rgba(10, 15, 28, 0.82);
-  --bg-overlay:     rgba(9, 13, 22, 0.96);
-  --bg-input:       rgba(15, 23, 42, 0.9);
+  /* Glass surfaces */
+  --glass-bg:           rgba(255, 255, 255, 0.04);
+  --glass-border:       rgba(255, 255, 255, 0.08);
+  --glass-border-hover: rgba(71, 122, 198, 0.35);
+
+  /* Card */
+  --card-bg:            rgba(255, 255, 255, 0.045);
+
+  /* Modal */
+  --modal-bg:           rgba(10, 15, 30, 0.96);
+  --modal-header-bg:    rgba(8, 12, 24, 0.98);
+
+  /* Pill / chip */
+  --pill-bg:            rgba(71, 122, 198, 0.08);
+
+  /* Chat */
+  --bg-chat-gradient:   rgba(255, 255, 255, 0.025);
+  --bg-chat-card:       rgba(255, 255, 255, 0.045);
+
+  /* Border */
+  --border-color:       rgba(255, 255, 255, 0.08);
+
+  /* Header */
+  --header-bg:          rgba(8, 13, 28, 0.82);
+
+  /* Info */
+  --info-light:         rgba(71, 122, 198, 0.14);
+  --info-dark:          #93C5FD;
+
+  /* Text */
+  --text-primary:       #F1F5F9;
+  --text-secondary:     #B8C5D6;
+  --text-tertiary:      #8899AA;
+  --text-on-accent:     #FFFFFF;
+
+  /* Background gradient mesh */
+  --gradient-bg:
+    radial-gradient(ellipse 60% 70% at 0% 0%,   rgba(71, 122, 198, 0.09) 0%, transparent 55%),
+    radial-gradient(ellipse 50% 60% at 100% 0%,  rgba(18, 198, 179, 0.05) 0%, transparent 50%),
+    radial-gradient(ellipse 65% 70% at 100% 100%, rgba(27, 42, 74, 0.18)  0%, transparent 55%),
+    radial-gradient(ellipse 50% 55% at 0% 100%,  rgba(71, 122, 198, 0.06) 0%, transparent 50%),
+    #0A0F1E;
+
+  --gradient-mesh:
+    radial-gradient(ellipse 60% 70% at 0% 0%,   rgba(71, 122, 198, 0.09) 0%, transparent 55%),
+    radial-gradient(ellipse 65% 70% at 100% 100%, rgba(27, 42, 74, 0.18)  0%, transparent 55%),
+    #0A0F1E;
+
+  /* Shadows */
+  --shadow-sm:   0 1px 4px  rgba(0, 0, 0, 0.45);
+  --shadow-md:   0 4px 20px rgba(0, 0, 0, 0.55);
+  --shadow-lg:   0 8px 40px rgba(0, 0, 0, 0.65);
+
+  /* Glows */
+  --glow-accent:         0 0 20px rgba(71, 122, 198, 0.22);
+  --glow-primary:        0 0 20px rgba(71, 122, 198, 0.32);
+  --glow-primary-strong: 0 0 32px rgba(71, 122, 198, 0.48);
+  --glow-turquoise:      0 0 20px rgba(18, 198, 179, 0.28);
+  --glow-success:        0 0 16px rgba(34, 197, 94, 0.28);
+  --glow-success-strong: 0 0 28px rgba(34, 197, 94, 0.42);
+  --glow-critical:       0 0 16px rgba(239, 68, 68, 0.32);
+  --glow-high:           0 0 16px rgba(245, 158, 11, 0.32);
+  --glow-medium:         0 0 16px rgba(71, 122, 198, 0.28);
+
+  /* Compatibility Tokens */
+  --c-cyan:         #12C6B3;
+  --c-cyan-dim:     rgba(18, 198, 179, 0.85);
+  --c-cyan-soft:    rgba(18, 198, 179, 0.25);
+  --c-blue:         #477AC6;
+  --c-indigo:       #477AC6;
+  --c-purple:       #818CF8;
+  --c-green:        #22C55E;
+  --c-yellow:       #F59E0B;
+  --c-red:          #EF4444;
+  --c-orange:       #F97316;
+  --c-slate:        #64748B;
+
+  --bg-page:        var(--bg-canvas);
+  --bg-surface:     var(--card-bg);
+  --bg-surface-lo:  var(--bg-elevated);
+  --bg-overlay:     var(--modal-bg);
+  --bg-input:       var(--bg-elevated);
   --bg-subtle:      rgba(255, 255, 255, 0.04);
   --bg-subtle-hi:   rgba(255, 255, 255, 0.08);
 
-  --border-base:    rgba(255, 255, 255, 0.08);
-  --border-mid:     rgba(255, 255, 255, 0.14);
-  --border-subtle:  rgba(255, 255, 255, 0.06);
-  --border-cyan:    rgba(56, 189, 248, 0.28);
+  --border-base:    var(--border-color);
+  --border-mid:     var(--glass-border);
+  --border-subtle:  rgba(255, 255, 255, 0.05);
+  --border-cyan:    rgba(18, 198, 179, 0.35);
 
-  --text-base:      #f1f5f9;
-  --text-muted:     #94a3b8;
-  --text-dim:       #64748b;
-  --text-faint:     #475569;
+  --text-base:      var(--text-primary);
+  --text-muted:     var(--text-secondary);
+  --text-dim:       var(--text-tertiary);
+  --text-faint:     #52627A;
 
   --r-sm:   8px;
   --r-md:   12px;
   --r-lg:   14px;
   --r-pill: 99px;
 
-  --shadow-cyan:  0 0 16px rgba(56, 189, 248, 0.22);
-  --shadow-card:  0 8px 32px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --shadow-cyan:  var(--glow-turquoise);
+  --shadow-card:  var(--shadow-md);
 }
 
-/* ─── Light Theme Tokens & Overrides ────────────────────────── */
-:root[data-theme="light"], body.theme-light {
-  --c-cyan:         #0284c7;
-  --c-cyan-dim:     #0369a1;
-  --c-cyan-soft:    #0284c7;
-  --c-indigo:       #4f46e5;
-  --c-purple:       #7c3aed;
-  --c-green:        #16a34a;
-  --c-yellow:       #d97706;
-  --c-red:          #dc2626;
-  --c-orange:       #ea580c;
+/* ═══════════════════════════════════════════════════════════
+   LIGHT THEME — BFSI Professional
+   Canvas: #F8F9FA  (neutral, no green tint)
+   Card:   #FFFFFF  (pure white, elevation via shadow)
+   Primary interactive: TCS Blue #477AC6
+═══════════════════════════════════════════════════════════ */
+:root[data-theme="light"], [data-theme="light"], body.theme-light {
+  /* Canvas layers */
+  --bg-canvas:          #F8F9FA;
+  --bg-primary:         #F8F9FA;
+  --bg-secondary:       #FFFFFF;
+  --bg-tertiary:        #F1F5F9;
+  --bg-elevated:        #FFFFFF;
+  --bg-card-solid:      #1E293B;
+
+  /* Glass surfaces */
+  --glass-bg:           rgba(241, 245, 249, 0.80);
+  --glass-border:       rgba(0, 0, 0, 0.09);
+  --glass-border-hover: rgba(71, 122, 198, 0.40);
+
+  /* Card */
+  --card-bg:            #FFFFFF;
+
+  /* Modal */
+  --modal-bg:           #FFFFFF;
+  --modal-header-bg:    #F8F9FA;
+
+  /* Pill / chip */
+  --pill-bg:            rgba(71, 122, 198, 0.08);
+
+  /* Chat */
+  --bg-chat-gradient:   #F8F9FA;
+  --bg-chat-card:       rgba(30, 41, 59, 0.92);
+
+  /* Border */
+  --border-color:       #E2E8F0;
+
+  /* Header */
+  --header-bg:          rgba(255, 255, 255, 0.88);
+
+  /* Info */
+  --info-light:         #DBEAFE;
+  --info-dark:          #1E40AF;
+
+  /* Text */
+  --text-primary:       #0F172A;
+  --text-secondary:     #334155;
+  --text-tertiary:      #64748B;
+  --text-on-accent:     #FFFFFF;
+
+  /* Background */
+  --gradient-bg:
+    radial-gradient(ellipse 50% 60% at 10% 10%, rgba(71, 122, 198, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse 40% 50% at 90% 90%, rgba(18, 198, 179, 0.04) 0%, transparent 50%),
+    #F8F9FA;
+
+  --gradient-mesh:
+    radial-gradient(ellipse 50% 60% at 10% 10%, rgba(71, 122, 198, 0.06) 0%, transparent 50%),
+    #F8F9FA;
+
+  /* Shadows */
+  --shadow-sm:   0 1px 3px  rgba(0, 0, 0, 0.07);
+  --shadow-md:   0 4px 14px rgba(0, 0, 0, 0.09);
+  --shadow-lg:   0 8px 28px rgba(0, 0, 0, 0.12);
+
+  /* Glows */
+  --glow-accent:         0 0 16px rgba(71, 122, 198, 0.14);
+  --glow-primary:        0 0 16px rgba(71, 122, 198, 0.20);
+  --glow-primary-strong: 0 0 24px rgba(71, 122, 198, 0.30);
+  --glow-turquoise:      0 0 16px rgba(18, 198, 179, 0.18);
+  --glow-success:        0 0 14px rgba(34, 197, 94, 0.22);
+  --glow-success-strong: 0 0 22px rgba(34, 197, 94, 0.32);
+  --glow-critical:       0 0 14px rgba(239, 68, 68, 0.22);
+  --glow-high:           0 0 14px rgba(245, 158, 11, 0.22);
+  --glow-medium:         0 0 14px rgba(71, 122, 198, 0.22);
+
+  /* Compatibility Tokens */
+  --c-cyan:         #0D9488;
+  --c-cyan-dim:     #0F766E;
+  --c-cyan-soft:    rgba(13, 148, 136, 0.15);
+  --c-blue:         #477AC6;
+  --c-indigo:       #477AC6;
+  --c-purple:       #6366F1;
+  --c-green:        #16A34A;
+  --c-yellow:       #D97706;
+  --c-red:          #DC2626;
+  --c-orange:       #EA580C;
   --c-slate:        #475569;
 
-  --bg-page:        #f8fafc;
-  --bg-surface:     #ffffff;
-  --bg-surface-lo:  #f1f5f9;
-  --bg-overlay:     rgba(255, 255, 255, 0.96);
-  --bg-input:       #ffffff;
-  --bg-subtle:      #f1f5f9;
-  --bg-subtle-hi:   #e2e8f0;
+  --bg-page:        var(--bg-canvas);
+  --bg-surface:     var(--card-bg);
+  --bg-surface-lo:  var(--bg-tertiary);
+  --bg-overlay:     var(--modal-bg);
+  --bg-input:       var(--bg-secondary);
+  --bg-subtle:      #F1F5F9;
+  --bg-subtle-hi:   #E2E8F0;
 
-  --border-base:    #e2e8f0;
-  --border-mid:     #cbd5e1;
-  --border-subtle:  #f1f5f9;
-  --border-cyan:    rgba(2, 132, 199, 0.35);
+  --border-base:    var(--border-color);
+  --border-mid:     #CBD5E1;
+  --border-subtle:  #F1F5F9;
+  --border-cyan:    rgba(71, 122, 198, 0.35);
 
-  --text-base:      #0f172a;
-  --text-muted:     #334155;
-  --text-dim:       #64748b;
-  --text-faint:     #94a3b8;
+  --text-base:      var(--text-primary);
+  --text-muted:     var(--text-secondary);
+  --text-dim:       var(--text-tertiary);
+  --text-faint:     #94A3B8;
 
-  --shadow-cyan:  0 0 14px rgba(2, 132, 199, 0.15);
-  --shadow-card:  0 4px 20px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-cyan:  var(--glow-accent);
+  --shadow-card:  var(--shadow-md);
 }
 
 :root[data-theme="light"] .header-title,

@@ -1,0 +1,20 @@
+{
+  "id": "CONF_01",
+  "description": "Two conflicting quotes from Yahoo Finance and Bloomberg API for the same ticker and timestamp.",
+  "tags": ["conflicts", "market-data", "quote-arbitration"],
+  "risk": "medium",
+  "input": {
+    "prompt": "Get current price for AAPL",
+    "workflow": "ENDPOINT"
+  },
+  "context_fixture": "Source A (Yahoo): AAPL $220.50 as of 2026-09-18T14:30:00Z\nSource B (Bloomberg): AAPL $218.10 as of 2026-09-18T14:30:00Z",
+  "expected": {
+    "conflict_flagged": true,
+    "selected_source": "most_authoritative_or_average",
+    "status": "pending_review"
+  },
+  "checks": [
+    "identifies price discrepancy > 1%",
+    "flags conflict to user rather than silently asserting one"
+  ]
+}

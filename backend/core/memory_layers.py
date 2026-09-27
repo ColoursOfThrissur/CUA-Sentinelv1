@@ -147,90 +147,99 @@ class MemoryLayersManager:
     ) -> List[Dict[str, Any]]:
         """
         Prevents context overflow for long coding sessions by compacting older
-        messages while preserving the last 4 messages intact.
+        messages while preserving the last 4 messages AND message[0] intact.
 
         Strategy:
         - If total chars <= max_chars, return unchanged.
-        - Otherwise, compact messages from index 0 to len-4:
+        - Always pin message[0] (the original user goal — never drop it).
+        - Compact messages from index 1 to len-4:
             * user messages > 500 chars → truncate to 300 + ellipsis
             * assistant messages with tool_calls → replace with 1-line summary
             * assistant messages > 800 chars → truncate to 500 + ellipsis
             * tool / tool_result messages → replace with compact placeholder
-        - Prepend a synthetic system notice at index 0.
+        - Prepend a synthetic system notice after message[0].
         """
         if not history:
             return history
 
-        # ── Total char count ──────────────────────────────────────────
         total_chars = sum(len(msg.get("content", "")) for msg in history)
         if total_chars <= max_chars:
             return history
 
-        # ── Split: compactable portion vs. tail to keep intact ────────
         keep_tail = 4
-        if len(history) <= keep_tail:
-            # All messages are in the "keep" window; nothing to compact.
+        if len(history) <= keep_tail + 1:
+            # Only the pinned first message + tail window; nothing to compact.
             return history
 
-        compactable = list(history[: len(history) - keep_tail])
-        tail = list(history[len(history) - keep_tail :])
+        # Always pin message[0] (original user goal)
+        pinned_first = history[0]
+        # Compactable: index 1 to len-keep_tail-1
+        compactable = list(history[1: len(history) - keep_tail])
+        tail = list(history[len(history) - keep_tail:])
 
-        # ── Compact each eligible message ─────────────────────────────
         compacted: List[Dict[str, Any]] = []
         for msg in compactable:
             role = msg.get("role", "")
             content = msg.get("content", "")
             tool_calls = msg.get("tool_calls", [])
-
-            new_msg = dict(msg)  # shallow copy so we don't mutate the original
+            new_msg = dict(msg)
 
             if role == "user":
                 if len(content) > 500:
-                    original_length = len(content)
-                    new_msg["content"] = (
-                        content[:300]
-                        + f" ... [compacted — {original_length} chars]"
-                    )
+                    new_msg["content"] = content[:300] + f" ... [compacted — {len(content)} chars]"
 
             elif role == "assistant":
                 if tool_calls:
-                    # Summarise tool calls instead of preserving full content
-                    names = ", ".join(
-                        tc.get("name", "unknown") for tc in tool_calls[:5]
-                    )
-                    new_msg["content"] = (
-                        f"[Tool calls: {names} — compacted]"
-                    )
+                    names = ", ".join(tc.get("name", "unknown") for tc in tool_calls[:5])
+                    new_msg["content"] = f"[Tool calls: {names} — compacted]"
                 elif len(content) > 800:
                     new_msg["content"] = content[:500] + " ... [compacted]"
 
             elif role in ("tool", "tool_result", "function"):
-                # Tool result messages can be very large; always compact them
                 if content:
-                    new_msg["content"] = (
-                        f"[Tool result compacted — {len(content)} chars]"
-                    )
+                    new_msg["content"] = f"[Tool result compacted — {len(content)} chars]"
 
             compacted.append(new_msg)
 
-        # ── Prepend synthetic compaction notice ───────────────────────
         compaction_notice: Dict[str, Any] = {
             "role": "system",
             "content": (
                 "[Context Compacted] Earlier conversation has been summarized "
-                "to stay within token limits. Recent messages below are complete."
+                "to stay within token limits. The original request (above) and "
+                "recent messages (below) are complete."
             ),
         }
 
-        result = [compaction_notice] + compacted + tail
+        # Layout: pinned_first | compaction_notice | compacted middle | tail
+        result = [pinned_first, compaction_notice] + compacted + tail
 
         logger.info(
             f"Context compacted: {total_chars} chars → "
             f"{sum(len(m.get('content', '')) for m in result)} chars "
-            f"({len(history)} msgs → {len(result)} msgs)"
+            f"({len(history)} msgs → {len(result)} msgs, message[0] preserved)"
         )
-
         return result
+
+    async def async_record_episodic_memory(
+        self,
+        task_id: str,
+        agent_type: str,
+        summary_payload: Dict[str, Any],
+        step_id: str = None,
+        retention_tier: str = "HOT",
+    ) -> None:
+        """
+        Fire-and-forget episodic memory write.
+        Does NOT block the caller's response path — safe to use in async request handlers.
+        SQLite write is fast (<5ms); ChromaDB embedding is offloaded to a thread.
+        """
+        import asyncio
+        asyncio.create_task(
+            asyncio.to_thread(
+                self.record_episodic_memory,
+                task_id, agent_type, summary_payload, step_id, retention_tier,
+            )
+        )
 
     def get_recent_autonomous_activity_summary(self, hours: int = 24) -> str:
         """

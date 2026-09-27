@@ -71,6 +71,25 @@ class CodeDiffEngine:
             "file_diffs": file_diffs
         }
 
+    _session_read_files: set = set()
+
+    @classmethod
+    def record_file_read(cls, file_path: str) -> None:
+        """Records that a file has been inspected/read within the current session."""
+        norm = os.path.normcase(os.path.normpath(os.path.abspath(file_path)))
+        cls._session_read_files.add(norm)
+
+    @classmethod
+    def is_file_read(cls, file_path: str) -> bool:
+        """Checks if a file has been read in the current session."""
+        norm = os.path.normcase(os.path.normpath(os.path.abspath(file_path)))
+        return norm in cls._session_read_files
+
+    @classmethod
+    def clear_session_reads(cls) -> None:
+        """Clears all session-tracked file reads."""
+        cls._session_read_files.clear()
+
     # -------------------------------------------------------------------------
     # Pillar 1: Surgical Search / Replace Block Editing
     # -------------------------------------------------------------------------
@@ -80,12 +99,12 @@ class CodeDiffEngine:
         Parses raw LLM output for <<<<<<< SEARCH … ======= … >>>>>>> REPLACE blocks.
 
         Returns a list of {"search": str, "replace": str} dicts, with leading/trailing
-        blank lines stripped from each half.  Returns [] if no blocks are found.
+        blank lines stripped from each half. Returns [] if no blocks are found.
         """
         import re as _re
 
         pattern = _re.compile(
-            r'<<<<<<< SEARCH\n(.*?)=======\n(.*?)>>>>>>> REPLACE',
+            r'<<<<<<< SEARCH[^\S\r\n]*\r?\n(.*?)=======[^\S\r\n]*\r?\n(.*?)>>>>>>> REPLACE',
             _re.DOTALL
         )
 
@@ -94,27 +113,30 @@ class CodeDiffEngine:
             search_text = match.group(1)
             replace_text = match.group(2)
 
-            # Strip leading/trailing blank lines while preserving internal indentation
-            search_text = "\n".join(
-                line for line in search_text.split("\n")
-            ).strip("\n")
-            replace_text = "\n".join(
-                line for line in replace_text.split("\n")
-            ).strip("\n")
+            # Strip leading/trailing newlines while preserving internal indentation
+            search_text = search_text.strip("\r\n")
+            replace_text = replace_text.strip("\r\n")
 
             blocks.append({"search": search_text, "replace": replace_text})
 
         return blocks
 
-    def apply_search_replace_blocks(self, file_path: str, block_text: str) -> Dict[str, Any]:
+    def apply_search_replace_blocks(
+        self,
+        file_path: str,
+        block_text: str,
+        require_read: bool = False,
+    ) -> Dict[str, Any]:
         """
         Applies all SEARCH/REPLACE blocks from *block_text* to *file_path* on disk.
 
-        Strategy for each block:
-          1. Exact string match → replace first occurrence.
-          2. Whitespace-normalised match → locate matching line range in original
-             content and splice the replacement in.
-          3. If still not found → record as a failure.
+        Strict Invariants (Claude Code Harness):
+          1. Read-Before-Write: target file must have been inspected within session if require_read=True.
+          2. Exact & Unique Match: search block must appear EXACTLY ONCE in the target content.
+             Ambiguous (>1 match) or missing (0 match) search blocks are rejected immediately.
+          3. Atomic All-or-Nothing: if any block in a multi-block edit fails, no changes are written to disk.
+          4. Syntax & AST Verification: validates Python / JSON syntax before saving to disk.
+             On syntax error, changes are aborted without modifying disk.
 
         Returns::
 
@@ -123,19 +145,31 @@ class CodeDiffEngine:
                 "file": str,
                 "blocks_applied": int,
                 "blocks_failed": int,
-                "failures": [{"block": int, "error": str}, ...]
+                "failures": [{"block": int, "error": str}, ...],
+                "error": Optional[str],
+                "reverted": Optional[bool]
             }
         """
-        import re as _re
-
         if not os.path.exists(file_path):
-            return {"success": False, "error": "File not found"}
+            return {"success": False, "file": file_path, "error": f"File not found: {file_path}", "blocks_applied": 0, "blocks_failed": 0, "failures": []}
+
+        # Invariant 1: Read-Before-Write
+        if require_read and not self.is_file_read(file_path):
+            rel_name = os.path.basename(file_path)
+            return {
+                "success": False,
+                "file": file_path,
+                "error": f"Read-before-write invariant violated: '{rel_name}' must be read before editing.",
+                "blocks_applied": 0,
+                "blocks_failed": 1,
+                "failures": [{"block": -1, "error": f"Read-before-write invariant violated: '{rel_name}' must be read before editing."}],
+            }
 
         try:
             with open(file_path, "r", encoding="utf-8", errors="ignore") as fh:
                 original_content = fh.read()
         except Exception as exc:
-            return {"success": False, "error": f"Could not read file: {exc}"}
+            return {"success": False, "file": file_path, "error": f"Could not read file: {exc}", "blocks_applied": 0, "blocks_failed": 0, "failures": []}
 
         blocks = self.parse_search_replace_blocks(block_text)
         if not blocks:
@@ -148,80 +182,111 @@ class CodeDiffEngine:
                 "warning": "No SEARCH/REPLACE blocks found in block_text"
             }
 
-        content = original_content
-        applied = 0
+        is_crlf = "\r\n" in original_content
+        staged_content = original_content
         failures: List[Dict[str, Any]] = []
 
-        def _normalize_ws(s: str) -> str:
-            """Collapse all whitespace runs to a single space."""
-            return _re.sub(r'\s+', ' ', s).strip()
-
         for idx, block in enumerate(blocks):
-            search_str = block["search"]
-            replace_str = block["replace"]
-            replaced = False
+            raw_search = block["search"]
+            raw_replace = block["replace"]
 
-            # --- Strategy 1: exact match ---
-            if search_str in content:
-                content = content.replace(search_str, replace_str, 1)
-                applied += 1
-                replaced = True
+            if not raw_search.strip():
+                failures.append({"block": idx, "error": "SEARCH block is empty"})
+                continue
 
-            # --- Strategy 2: whitespace-normalised match ---
-            if not replaced:
-                norm_search = _normalize_ws(search_str)
-                lines = content.splitlines(keepends=True)
+            # Adapt line endings to match target file content
+            if is_crlf:
+                search_str = raw_search.replace("\r\n", "\n").replace("\n", "\r\n")
+                replace_str = raw_replace.replace("\r\n", "\n").replace("\n", "\r\n")
+            else:
+                search_str = raw_search.replace("\r\n", "\n")
+                replace_str = raw_replace.replace("\r\n", "\n")
 
-                # Build a sliding window over lines, comparing normalised text
-                search_line_count = search_str.count("\n") + 1
-                # Allow ±3 line slack for minor blank-line differences
-                for window_size in range(
-                    max(1, search_line_count - 3),
-                    search_line_count + 4
-                ):
-                    for start_idx in range(len(lines) - window_size + 1):
-                        window = lines[start_idx: start_idx + window_size]
-                        norm_window = _normalize_ws("".join(window))
-                        if norm_window == norm_search:
-                            # Preserve trailing newline of last window line
-                            trailing_nl = "\n" if "".join(window).endswith("\n") else ""
-                            replacement_lines = replace_str + trailing_nl
-                            lines[start_idx: start_idx + window_size] = [replacement_lines]
-                            content = "".join(lines)
-                            applied += 1
-                            replaced = True
-                            break
-                    if replaced:
-                        break
-
-            if not replaced:
+            # Invariant 2: Exact & Unique Match Check
+            count = staged_content.count(search_str)
+            if count == 0:
                 logger.warning(
                     "apply_search_replace_blocks: block %d not found in %s",
                     idx, file_path
                 )
-                failures.append({"block": idx, "error": "SEARCH block not found in file"})
+                failures.append({
+                    "block": idx,
+                    "error": "SEARCH block not found in file. Ensure exact whitespace, indentation, and line match."
+                })
+            elif count > 1:
+                logger.warning(
+                    "apply_search_replace_blocks: block %d ambiguous in %s (found %d matches)",
+                    idx, file_path, count
+                )
+                failures.append({
+                    "block": idx,
+                    "error": f"SEARCH block is ambiguous: found {count} exact occurrences. Provide more surrounding context lines."
+                })
+            else:
+                staged_content = staged_content.replace(search_str, replace_str, 1)
 
-        # Write updated content back only when at least one block was applied
-        if applied > 0:
+        # Invariant 3: Atomic All-or-Nothing Gate
+        if failures:
+            return {
+                "success": False,
+                "file": file_path,
+                "error": f"Failed applying {len(failures)} block(s): " + "; ".join(f["error"] for f in failures),
+                "blocks_applied": 0,
+                "blocks_failed": len(failures),
+                "failures": failures,
+            }
+
+        # Invariant 4: Syntax / AST Verification Gate
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == ".py":
+            import ast
             try:
-                with open(file_path, "w", encoding="utf-8") as fh:
-                    fh.write(content)
-            except Exception as exc:
+                ast.parse(staged_content)
+            except SyntaxError as syn:
                 return {
                     "success": False,
                     "file": file_path,
-                    "error": f"Could not write file: {exc}",
-                    "blocks_applied": applied,
-                    "blocks_failed": len(failures),
-                    "failures": failures
+                    "error": f"SYNTAX_ERROR: Python SyntaxError on line {syn.lineno}: {syn.msg}",
+                    "reverted": True,
+                    "blocks_applied": 0,
+                    "blocks_failed": len(blocks),
+                    "failures": [{"block": -1, "error": f"Python SyntaxError on line {syn.lineno}: {syn.msg}"}],
+                }
+        elif ext == ".json":
+            import json
+            try:
+                json.loads(staged_content)
+            except Exception as jerr:
+                return {
+                    "success": False,
+                    "file": file_path,
+                    "error": f"SYNTAX_ERROR: JSON syntax error: {jerr}",
+                    "reverted": True,
+                    "blocks_applied": 0,
+                    "blocks_failed": len(blocks),
+                    "failures": [{"block": -1, "error": f"JSON syntax error: {jerr}"}],
                 }
 
+        # Write atomically verified content to disk
+        try:
+            with open(file_path, "w", encoding="utf-8", newline="") as fh:
+                fh.write(staged_content)
+        except Exception as exc:
+            return {
+                "success": False,
+                "file": file_path,
+                "error": f"Could not write file: {exc}",
+                "blocks_applied": 0,
+                "blocks_failed": len(blocks),
+                "failures": [{"block": -1, "error": str(exc)}],
+            }
+
         return {
-            "success": len(failures) == 0,
+            "success": True,
             "file": file_path,
-            "blocks_applied": applied,
-            "blocks_failed": len(failures),
-            "failures": failures
+            "blocks_applied": len(blocks),
+            "blocks_failed": 0,
+            "failures": [],
         }
 
     # -------------------------------------------------------------------------

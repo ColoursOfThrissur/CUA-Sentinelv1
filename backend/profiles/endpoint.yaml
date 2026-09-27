@@ -1,0 +1,37 @@
+name: endpoint_agent
+version: "1.0.0"
+description: "Universal chat endpoint with finance and memory integration"
+prompt_template: "templates/endpoint_chat.txt"
+model_preference: "qwen3_14b_q4"
+tools_allowed:
+  - "mcp:*"
+  - search_tools
+  - web_search
+  - fetch_ticker_quote
+  - search_emails
+  - fetch_recent_emails
+  - desktop_file_write
+  - blender:create_box
+  - blender:create_sphere
+  - blender:create_cylinder
+  - blender:create_cone
+  - blender:create_torus
+  - blender:apply_subdivision
+  - blender:apply_boolean
+  - blender:apply_bevel
+  - blender:set_smooth_shading
+  - blender:set_material
+  - blender:join_objects
+  - blender:delete_object
+  - blender:clear_scene
+  - blender:create_light
+  - blender:create_camera
+  - blender:set_transform
+  - blender:get_manifest
+  - blender:build_spec
+  - blender:save_approved
+view: "finance_summary_view"
+output_schema: null
+validators:
+  - validate_chat_output
+eval_pack: "eval/golden/endpoint"

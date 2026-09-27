@@ -210,6 +210,9 @@ class StateManager:
             if not row:
                 raise StateTransitionError(f"Model not found: {model_id}")
             current = row["current_state"]
+            if current == new_state:
+                conn.execute("COMMIT")
+                return True
             if new_state not in MODEL_TRANSITIONS.get(current, set()):
                 raise StateTransitionError(f"Invalid model transition {current} -> {new_state}")
             conn.execute(

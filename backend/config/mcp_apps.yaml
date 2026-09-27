@@ -1,0 +1,95 @@
+apps:
+  filesystem:
+    display_name: File System
+    icon: folder-open
+    transport: stdio
+    command: npx
+    args:
+    - -y
+    - '@modelcontextprotocol/server-filesystem'
+    - C:/Users/derik/Desktop
+    env: {}
+    enabled: true
+    security:
+      default_side_effect: write
+      default_risk_level: L1
+      returns_untrusted: false
+    description: Read, write, and manage files and directories
+  github:
+    display_name: GitHub
+    icon: github
+    transport: stdio
+    command: ''
+    args: []
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: ''
+    enabled: true
+    security:
+      default_risk_level: L2
+      default_side_effect: write
+      returns_untrusted: false
+    description: Manage repos, PRs, issues, and code on GitHub
+  brave_search:
+    display_name: Brave Search
+    icon: search
+    transport: stdio
+    command: npx
+    args:
+    - -y
+    - '@modelcontextprotocol/server-brave-search'
+    env:
+      BRAVE_API_KEY: ''
+    enabled: false
+    security:
+      default_side_effect: read
+      default_risk_level: L0
+      returns_untrusted: true
+    description: Web search via Brave Search API
+  postgres:
+    display_name: PostgreSQL
+    icon: database
+    transport: stdio
+    command: npx
+    args:
+    - -y
+    - '@modelcontextprotocol/server-postgres'
+    env:
+      POSTGRES_CONNECTION_STRING: ''
+    enabled: false
+    security:
+      default_side_effect: write
+      default_risk_level: L2
+      returns_untrusted: true
+    description: Query and manage PostgreSQL databases
+  slack:
+    display_name: Slack
+    icon: message-square
+    transport: stdio
+    command: npx
+    args:
+    - -y
+    - '@modelcontextprotocol/server-slack'
+    env:
+      SLACK_BOT_TOKEN: ''
+    enabled: false
+    security:
+      default_side_effect: write
+      default_risk_level: L2
+      returns_untrusted: true
+    description: Send messages, read channels, and manage Slack workspace
+  blender:
+    display_name: Blender
+    icon: null
+    transport: stdio
+    command: ''
+    args: []
+    url: null
+    env: null
+    description: Can create 3D models
+    security:
+      default_risk_level: L0
+      default_side_effect: act
+      returns_untrusted: false
+      auto_approve: true
+      taint_safe: true
+    enabled: true

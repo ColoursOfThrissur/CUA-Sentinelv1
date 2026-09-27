@@ -1,0 +1,22 @@
+name: researcher
+version: "1.0.0"
+description: "Production-Grade Autonomous Deep Researcher with problem decomposition and source authority ranking"
+prompt_template: "templates/researcher_analysis.txt"
+model_preference: "qwen3_5_9b"
+tools_allowed:
+  - web_search
+  - crawl_and_process
+view: null
+output_schema:
+  type: object
+  required:
+    - sub_questions
+    - research_strategy
+  properties:
+    sub_questions:
+      type: array
+    research_strategy:
+      type: string
+validators:
+  - validate_research_output
+eval_pack: "eval/golden/freshness"

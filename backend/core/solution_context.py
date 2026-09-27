@@ -25,6 +25,142 @@ ALLOWED_EXTS = {
     ".py", ".ts", ".tsx", ".js", ".jsx", ".json", ".sql", ".css", ".html", ".md"
 }
 
+class SolutionSession:
+    """
+    Tracks the full context of an ongoing code solution across multiple steps and
+    backend restarts.  State is persisted to operational.sqlite so a crash or restart
+    doesn't lose the problem statement, approaches tried, and files touched.
+
+    Usage:
+        session = SolutionSession.load_or_create(task_id)
+        session.record_approach("tried async refactor", rejected_because="circular imports")
+        session.add_file_touched("backend/core/foo.py")
+        session.save()
+    """
+
+    def __init__(self, task_id: str, data: dict):
+        self.task_id = task_id
+        self._data = data  # mutable dict persisted to DB
+
+    # ----------------------------------------------------------------
+    # Load / create
+    # ----------------------------------------------------------------
+
+    @classmethod
+    def load_or_create(cls, task_id: str, problem_statement: str = "") -> "SolutionSession":
+        """Load an existing session from DB or create a new one."""
+        try:
+            from db.connections import get_operational_db
+            conn = get_operational_db()
+            try:
+                cls._ensure_table(conn)
+                row = conn.execute(
+                    "SELECT data_json FROM solution_sessions WHERE task_id = ?",
+                    (task_id,),
+                ).fetchone()
+                if row:
+                    data = json.loads(row["data_json"])
+                    return cls(task_id, data)
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"SolutionSession DB load failed: {e}")
+
+        # New session
+        data = {
+            "task_id": task_id,
+            "problem_statement": problem_statement,
+            "approaches": [],   # [{description, rejected_because, timestamp}]
+            "files_touched": [],
+            "test_results": [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        session = cls(task_id, data)
+        session.save()
+        return session
+
+    def save(self) -> None:
+        """Persist current state to operational DB."""
+        try:
+            from db.connections import get_operational_db
+            conn = get_operational_db()
+            try:
+                self._ensure_table(conn)
+                conn.execute(
+                    """INSERT OR REPLACE INTO solution_sessions (task_id, data_json, updated_at)
+                       VALUES (?, ?, datetime('now'))""",
+                    (self.task_id, json.dumps(self._data)),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"SolutionSession DB save failed: {e}")
+
+    # ----------------------------------------------------------------
+    # Mutation helpers
+    # ----------------------------------------------------------------
+
+    def record_approach(self, description: str, rejected_because: str = "") -> None:
+        self._data["approaches"].append({
+            "description": description,
+            "rejected_because": rejected_because,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        self.save()
+
+    def add_file_touched(self, rel_path: str) -> None:
+        if rel_path not in self._data["files_touched"]:
+            self._data["files_touched"].append(rel_path)
+        self.save()
+
+    def record_test_result(self, result: dict) -> None:
+        self._data["test_results"].append({**result, "timestamp": datetime.now(timezone.utc).isoformat()})
+        self.save()
+
+    # ----------------------------------------------------------------
+    # Accessors
+    # ----------------------------------------------------------------
+
+    @property
+    def problem_statement(self) -> str:
+        return self._data.get("problem_statement", "")
+
+    @property
+    def approaches(self) -> list:
+        return self._data.get("approaches", [])
+
+    @property
+    def files_touched(self) -> list:
+        return self._data.get("files_touched", [])
+
+    def to_prompt_context(self) -> str:
+        """Return a compact string suitable for injection into an LLM system prompt."""
+        lines = [f"Problem: {self.problem_statement}"]
+        if self.approaches:
+            lines.append("Approaches tried:")
+            for a in self.approaches[-5:]:  # last 5 only
+                rej = f" (rejected: {a['rejected_because']})" if a.get("rejected_because") else ""
+                lines.append(f"  - {a['description']}{rej}")
+        if self.files_touched:
+            lines.append(f"Files touched: {', '.join(self.files_touched[-10:])}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _ensure_table(conn) -> None:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS solution_sessions (
+                task_id TEXT PRIMARY KEY,
+                data_json TEXT NOT NULL,
+                updated_at TEXT
+            )
+        """)
+        conn.commit()
+
+
+from datetime import datetime, timezone  # noqa: E402 (used by SolutionSession)
+
+
 class SolutionContextEngine:
     def analyze_python_file(self, content: str, rel_path: str) -> Dict[str, Any]:
         """Extracts AST docstrings, classes, functions, and imports from Python code."""

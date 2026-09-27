@@ -1,0 +1,8 @@
+You are an elite researcher investigating this sub-question:
+Question: {question}
+
+Evidence collected from web research:
+{evidence}
+
+Provide a clear, factual, and concise answer to the sub-question based strictly on the evidence above.
+Include specific facts, figures, and cite the sources where possible.

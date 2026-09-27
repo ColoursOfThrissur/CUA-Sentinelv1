@@ -100,6 +100,11 @@ async def toggle_safe_mode(request: dict):
 @router.post("/system/emergency-stop")
 async def emergency_stop():
     from datetime import datetime, timezone
+    try:
+        from tools.desktop_tool import abort_desktop_actions
+        abort_desktop_actions()
+    except Exception:
+        pass
     conn = get_operational_db()
     try:
         conn.execute(
@@ -110,3 +115,24 @@ async def emergency_stop():
         return {"emergency_stop": True}
     finally:
         conn.close()
+
+
+@router.post("/system/emergency-stop/reset")
+async def reset_emergency_stop():
+    from datetime import datetime, timezone
+    try:
+        from tools.desktop_tool import reset_desktop_abort
+        reset_desktop_abort()
+    except Exception:
+        pass
+    conn = get_operational_db()
+    try:
+        conn.execute(
+            "UPDATE system_state SET value = 'false', updated_at = ? WHERE key = 'emergency_stop'",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+        conn.commit()
+        return {"emergency_stop": False}
+    finally:
+        conn.close()
+

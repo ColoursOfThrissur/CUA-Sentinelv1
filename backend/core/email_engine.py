@@ -86,10 +86,11 @@ class EmailEngine:
 
         return results
 
-    def search_emails(self, email_user: str, app_password: str, query: str = "", max_results: int = 5) -> List[Dict[str, Any]]:
+    def search_emails(self, email_user: str, app_password: str, query: str = "", max_results: int = 5, search_term: str = "") -> List[Dict[str, Any]]:
         """
         Searches Gmail inbox via IMAP for specific keyword/query matching subject or body.
         """
+        query = query or search_term
         results = []
         if not email_user or not app_password:
             return results

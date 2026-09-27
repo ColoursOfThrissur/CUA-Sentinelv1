@@ -1,0 +1,22 @@
+name: synthesizer
+version: "1.0.0"
+description: "Industry Synthesizer for scheduled multi-topic digests"
+prompt_template: "templates/synthesizer_digest.txt"
+model_preference: "mistral_7b"
+tools_allowed:
+  - web_search
+  - fetch_rss
+view: null
+output_schema:
+  type: object
+  required:
+    - topic
+    - digest
+  properties:
+    topic:
+      type: string
+    digest:
+      type: string
+validators:
+  - validate_digest_output
+eval_pack: "eval/golden/endpoint"

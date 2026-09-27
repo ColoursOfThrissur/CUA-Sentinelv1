@@ -1,0 +1,11 @@
+You are creating a daily digest for: {topic}
+
+Items:
+{items}
+
+Write a concise high-signal digest:
+1. Top 3-5 most important developments
+2. Why each matters
+3. Any trends or patterns
+
+Be direct. No filler.

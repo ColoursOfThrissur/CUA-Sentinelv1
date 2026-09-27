@@ -1,0 +1,19 @@
+{
+  "id": "EP_01",
+  "description": "Direct QA asking for total spending summary across two clean fixture receipts.",
+  "tags": ["endpoint", "qa", "aggregation"],
+  "risk": "low",
+  "input": {
+    "prompt": "How much did I spend in total across my Amazon and Whole Foods orders?",
+    "workflow": "ENDPOINT"
+  },
+  "context_fixture": "[RECEIPT 1]: Amazon order #402 - Total: $84.50 USD\n[RECEIPT 2]: Whole Foods store #12 - Total: $45.12 USD",
+  "expected": {
+    "total_amount": 129.62,
+    "currency": "USD"
+  },
+  "checks": [
+    "response states exact sum: $129.62",
+    "currency USD preserved"
+  ]
+}

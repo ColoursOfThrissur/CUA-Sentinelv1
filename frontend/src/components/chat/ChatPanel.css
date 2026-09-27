@@ -277,3 +277,100 @@
 .msg-assistant tr:nth-child(even) {
   background: var(--bg-subtle);
 }
+
+/* Inline Action & Plan Approval Cards */
+.chat-approval-box {
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-approval-desc {
+  font-size: 0.8rem;
+  color: #fbbf24;
+  line-height: 1.4;
+}
+
+.chat-approval-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 3D Spec Approval Card */
+.chat-spec3d-card {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.08) 0%, rgba(15, 23, 42, 0.6) 100%);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-spec3d-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.chat-spec3d-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #f8fafc;
+}
+
+.chat-spec3d-meta {
+  font-size: 0.76rem;
+  color: #94a3b8;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Plan Approval Card */
+.chat-plan-card {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: rgba(147, 51, 234, 0.08);
+  border: 1px solid rgba(147, 51, 234, 0.25);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-plan-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #c084fc;
+}
+
+.chat-plan-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: #cbd5e1;
+}
+
+.chat-plan-step-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 4px;
+}

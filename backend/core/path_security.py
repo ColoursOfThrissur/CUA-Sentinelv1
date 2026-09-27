@@ -106,6 +106,37 @@ class PathSecurityGuardrail:
         return True
 
     def validate_read_permission(self, target_path: str) -> bool:
+        r"""
+        Validates whether target_path is allowed for read operations.
+        Blocks critical OS system directories (System32, Windows, etc.)
+        but allows reading from any safe user-accessible location.
+        """
+        if not target_path:
+            return False
+
+        try:
+            resolved = Path(target_path).resolve()
+        except Exception:
+            return False
+
+        # Block reads from critical system directories
+        parts_lower = [p.lower() for p in resolved.parts]
+        for part in parts_lower:
+            if part in CRITICAL_SYSTEM_DIRS:
+                logger.warning(f"Read blocked: path touches critical system directory '{part}' in '{resolved}'")
+                return False
+
+        # Block reads of protected sentinel assets (databases, .git)
+        if resolved.name.lower() in PROTECTED_EXCLUSION_NAMES:
+            logger.warning(f"Read blocked: path targets protected asset '{resolved.name}' in '{resolved}'")
+            return False
+
+        # Verify drive is in allowed list
+        drive_letter = os.path.splitdrive(str(resolved))[0].upper()
+        if drive_letter and drive_letter not in self.allowed_drives:
+            logger.warning(f"Read blocked: drive '{drive_letter}' not in allowed drives")
+            return False
+
         return True
 
 

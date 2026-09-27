@@ -44,7 +44,7 @@ class DiscordSentinelBot:
 
         intents = discord.Intents.default()
         intents.message_content = True
-        self.client = discord.Client(intents=intents)
+        self.client = discord.Client(intents=intents, allowed_mentions=discord.AllowedMentions.none())
 
         @self.client.event
         async def on_ready():
@@ -52,16 +52,8 @@ class DiscordSentinelBot:
 
         @self.client.event
         async def on_message(message):
-            if message.author == self.client.user:
-                return
-
-            # User Whitelist Guard
-            if self.allowed_user_id and str(message.author.id) != self.allowed_user_id:
-                logger.warning(f"Ignored Discord message from unauthorized user ID: {message.author.id}")
-                try:
-                    await message.channel.send(f"⚠️ **Security Notice**: Your Discord User ID (`{message.author.id}`) is not authorized. Please update **Allowed User ID (Whitelist)** in CUA-Sentinel UI Settings.")
-                except Exception:
-                    pass
+            # Fail-closed User Whitelist Guard
+            if message.author.bot or not self.allowed_user_id or str(message.author.id) != self.allowed_user_id:
                 return
 
             content = message.content.strip()
@@ -78,11 +70,11 @@ class DiscordSentinelBot:
                     color=0x38bdf8
                 )
                 help_embed.add_field(name="!price <symbol>", value="Fetch live stock or crypto quote (e.g. `!price NVDA` or `!price BTC`)", inline=False)
-                help_embed.add_field(name="!cua screenshot", value="Capture compressed desktop screenshot & attach image", inline=False)
                 help_embed.add_field(name="!link <url>", value="Bookmark & RAG index web page link", inline=False)
                 help_embed.add_field(name="!remind <time> <prompt>", value="Schedule background reminder (e.g. `!remind 15m Check email for tracking`)", inline=False)
                 help_embed.add_field(name="!digest", value="Generate & post Daily Operations Digest (Portfolio, Gmail, Tech Radar)", inline=False)
-                help_embed.add_field(name="<Any text prompt>", value="Run AI Deep Research or direct chat", inline=False)
+                help_embed.add_field(name="!web <prompt>", value="Run AI Deep Research with live web search", inline=False)
+                help_embed.add_field(name="<Any text prompt>", value="Direct AI chat (local model)", inline=False)
                 await message.channel.send(embed=help_embed)
                 return
 
@@ -96,7 +88,7 @@ class DiscordSentinelBot:
                         embed = discord.Embed(title="📊 Daily Operations Digest", description=res["full_markdown"][:2000], color=0x38bdf8)
                         await message.channel.send(embed=embed)
                     except Exception as d_err:
-                        await message.channel.send(f"❌ Could not generate digest: {d_err}")
+                        await message.channel.send(f"❌ Could not generate digest: {d_err}", suppress_embeds=True)
                 return
 
             # 1.5 Command: !remind / !schedule <time> <prompt>
@@ -115,11 +107,11 @@ class DiscordSentinelBot:
                             embed.add_field(name="Prompt", value=prompt_text, inline=False)
                             await message.channel.send(embed=embed)
                         else:
-                            await message.channel.send("❌ Invalid time format. Use e.g. `10s`, `15m`, `2h`, `1d`.")
+                            await message.channel.send("❌ Invalid time format. Use e.g. `10s`, `15m`, `2h`, `1d`.", suppress_embeds=True)
                     except Exception as s_err:
-                        await message.channel.send(f"❌ Could not schedule reminder: {s_err}")
+                        await message.channel.send(f"❌ Could not schedule reminder: {s_err}", suppress_embeds=True)
                 else:
-                    await message.channel.send("Usage: `!remind <time> <prompt>` (e.g. `!remind 15m Check order status`)")
+                    await message.channel.send("Usage: `!remind <time> <prompt>` (e.g. `!remind 15m Check order status`)", suppress_embeds=True)
                 return
 
             # 2. Command: !price <symbol>
@@ -141,32 +133,10 @@ class DiscordSentinelBot:
                         embed.set_footer(text=f"Timestamp: {quote.get('timestamp')}")
                         await message.channel.send(embed=embed)
                     else:
-                        await message.channel.send(f"❌ Could not fetch market quote for symbol `{symbol}`.")
+                        await message.channel.send(f"❌ Could not fetch market quote for symbol `{symbol}`.", suppress_embeds=True)
                 return
 
-            # 3. Command: !cua screenshot
-            if content.lower().startswith("!cua screenshot"):
-                async with message.channel.typing():
-                    from tools.desktop_tool import DesktopTool
-                    desktop = DesktopTool()
-                    res = desktop.take_screenshot(max_width=1280, quality=80)
-                    win_info = desktop.get_active_window()
-
-                    b64_data = res.get("full_b64", "")
-                    if b64_data:
-                        img_bytes = base64.b64decode(b64_data)
-                        file = discord.File(io.BytesIO(img_bytes), filename="desktop_screenshot.jpg")
-                        embed = discord.Embed(
-                            title="🖥️ CUA Desktop Screenshot Captured",
-                            description=f"**Active Window**: `{win_info.get('title')}`\n**Resolution**: {res.get('width')}x{res.get('height')} (Captured JPEG {res.get('size_kb')}KB)",
-                            color=0x38bdf8
-                        )
-                        await message.channel.send(embed=embed, file=file)
-                    else:
-                        await message.channel.send("❌ Desktop capture failed.")
-                return
-
-            # 4. Command: !link <url>
+            # 3. Command: !link <url>
             if content.lower().startswith("!link"):
                 parts = content.split()
                 if len(parts) > 1:
@@ -184,18 +154,25 @@ class DiscordSentinelBot:
                         await message.channel.send(embed=embed)
                     return
 
-            # 5. Default: Direct AI Prompting & Task Dispatch
+            # 4. Default: Direct AI Prompting & Task Dispatch (requires !web for live web crawl)
+            use_web = False
+            prompt_text = content
+            if content.lower().startswith("!web "):
+                use_web = True
+                prompt_text = content[5:].strip()
+
             async with message.channel.typing():
                 if self.task_queue:
                     task_id = self.task_queue.enqueue(
                         workflow_type="ENDPOINT",
-                        title=f"Discord Chat: {content[:50]}",
-                        input_payload={"prompt": content, "use_web": True},
+                        title=f"Discord Chat: {prompt_text[:50]}",
+                        input_payload={"prompt": prompt_text, "use_web": use_web},
                         priority=0
                     )
-                    await message.channel.send(f"⏳ *Processing request... (Task `{task_id}`)*")
+                    await message.channel.send(f"⏳ *Processing request... (Task `{task_id}`)*", suppress_embeds=True)
 
                     # Wait for task completion
+                    completed = False
                     for _ in range(45):
                         await asyncio.sleep(2)
                         t = self.task_queue.get_task(task_id)
@@ -209,13 +186,30 @@ class DiscordSentinelBot:
                             else:
                                 chunk = resp_text
 
-                            await message.channel.send(f"🤖 **Sentinel Response:**\n\n{chunk}")
+                            await message.channel.send(f"🤖 **Sentinel Response:**\n\n{chunk}", suppress_embeds=True)
+                            completed = True
                             return
                         elif t and t.get("status") == "FAILED":
-                            await message.channel.send(f"❌ Task failed: {t.get('error_message')}")
+                            await message.channel.send(f"❌ Task failed: {t.get('error_message')}", suppress_embeds=True)
+                            completed = True
                             return
+
+                    if not completed:
+                        t = self.task_queue.get_task(task_id)
+                        status = t.get("status") if t else "UNKNOWN"
+                        if status == "WAITING_APPROVAL":
+                            await message.channel.send(
+                                f"⚠️ Task `{task_id}` requires HITL approval in CUA-Sentinel dashboard before proceeding.",
+                                suppress_embeds=True
+                            )
+                        else:
+                            await message.channel.send(
+                                f"⏳ Request still in progress (Task `{task_id}`, status: `{status}`). Check the web dashboard.",
+                                suppress_embeds=True
+                            )
+                        return
                 else:
-                    await message.channel.send("❌ Task Queue is currently offline.")
+                    await message.channel.send("❌ Task Queue is currently offline.", suppress_embeds=True)
 
         loop = asyncio.get_event_loop()
         self.bot_task = loop.create_task(self.client.start(token))
