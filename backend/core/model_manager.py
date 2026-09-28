@@ -1,4 +1,5 @@
 import logging
+import time
 import httpx
 import psutil
 from datetime import datetime, timezone
@@ -335,6 +336,7 @@ class ModelManager:
             messages.append({"role": "system", "content": effective_system_prompt})
         messages.append({"role": "user", "content": effective_user_prompt})
 
+        start_time = time.time()
         try:
             with httpx.Client(timeout=300) as client:
                 resp = client.post(
@@ -359,18 +361,51 @@ class ModelManager:
                 # Strip any think blocks that slip through
                 import re
                 content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+                
+                duration_ms = int((time.time() - start_time) * 1000)
+                tokens_in = len(prompt.split())
+                tokens_out = len(content.split())
+                
+                # Log full trace for debugging
+                self._log_llm_trace(
+                    task_id=task_id,
+                    model_id=model_id,
+                    system_prompt=effective_system_prompt,
+                    user_prompt=effective_user_prompt,
+                    response=content,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    temperature=temperature,
+                    context_budget=context_budget,
+                    duration_ms=duration_ms,
+                )
+                
                 self.state.audit(
                     action_type="MODEL_GENERATED",
                     who_actor="ModelManager",
                     task_id=task_id,
                     result={
                         "model_id": model_id,
-                        "tokens_in_est": len(prompt.split()),
-                        "tokens_out_est": len(content.split()),
+                        "tokens_in_est": tokens_in,
+                        "tokens_out_est": tokens_out,
                     },
                 )
                 return content
         except Exception as e:
+            duration_ms = int((time.time() - start_time) * 1000)
+            self._log_llm_trace(
+                task_id=task_id,
+                model_id=model_id,
+                system_prompt=effective_system_prompt,
+                user_prompt=effective_user_prompt,
+                response=None,
+                tokens_in=len(prompt.split()),
+                tokens_out=0,
+                temperature=temperature,
+                context_budget=context_budget,
+                duration_ms=duration_ms,
+                error=str(e),
+            )
             logger.error(f"Inference error for model {model_id}: {e}")
             raise ModelInferenceError(
                 f"Could not connect to Ollama backend at `{self.ollama_url}` ({e}). "
@@ -378,6 +413,83 @@ class ModelManager:
             ) from e
         finally:
             self._set_model_state(model_id, "READY", clear_busy=True)
+
+    def _log_llm_trace(
+        self,
+        task_id: str,
+        model_id: str,
+        system_prompt: Optional[str],
+        user_prompt: str,
+        response: Optional[str],
+        tokens_in: int,
+        tokens_out: int,
+        temperature: float,
+        context_budget: int,
+        duration_ms: int,
+        error: Optional[str] = None,
+    ) -> None:
+        """Log full LLM call trace for debugging. Auto-prunes to keep only recent tasks."""
+        try:
+            conn = get_operational_db()
+            try:
+                # Ensure table exists
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS llm_traces (
+                        trace_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        task_id TEXT NOT NULL,
+                        step_id TEXT,
+                        model_id TEXT NOT NULL,
+                        system_prompt TEXT,
+                        user_prompt TEXT NOT NULL,
+                        response TEXT,
+                        tokens_in_est INTEGER,
+                        tokens_out_est INTEGER,
+                        temperature REAL,
+                        context_budget INTEGER,
+                        duration_ms INTEGER,
+                        error TEXT,
+                        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+                    )
+                """)
+                
+                # Insert trace
+                conn.execute(
+                    """
+                    INSERT INTO llm_traces (
+                        task_id, model_id, system_prompt, user_prompt, response,
+                        tokens_in_est, tokens_out_est, temperature, context_budget,
+                        duration_ms, error, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        task_id,
+                        model_id,
+                        system_prompt[:10000] if system_prompt else None,  # Cap at 10k chars
+                        user_prompt[:50000],  # Cap at 50k chars
+                        response[:50000] if response else None,  # Cap at 50k chars
+                        tokens_in,
+                        tokens_out,
+                        temperature,
+                        context_budget,
+                        duration_ms,
+                        error,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+                
+                # Prune old traces - keep only traces from last 5 distinct tasks
+                conn.execute("""
+                    DELETE FROM llm_traces 
+                    WHERE task_id NOT IN (
+                        SELECT DISTINCT task_id FROM llm_traces 
+                        ORDER BY created_at DESC LIMIT 5
+                    )
+                """)
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.debug(f"Failed to log LLM trace: {e}")
 
     async def generate_async(
         self,

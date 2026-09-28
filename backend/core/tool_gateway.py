@@ -140,6 +140,7 @@ class ToolGateway:
             "blender:apply_subdivision": (b_ops.ApplySubdivisionParams, b_ops._APPLY_SUBDIVISION_TEMPLATE),
             "blender:apply_boolean": (b_ops.ApplyBooleanParams, b_ops._APPLY_BOOLEAN_TEMPLATE),
             "blender:apply_bevel": (b_ops.ApplyBevelParams, b_ops._APPLY_BEVEL_TEMPLATE),
+            "blender:apply_array": (b_ops.ApplyArrayParams, b_ops._APPLY_ARRAY_TEMPLATE),
             "blender:set_smooth_shading": (b_ops.SetSmoothShadingParams, b_ops._SET_SMOOTH_SHADING_TEMPLATE),
             "blender:set_material": (b_ops.SetMaterialParams, b_ops._SET_MATERIAL_TEMPLATE),
             "blender:join_objects": (b_ops.JoinObjectsParams, b_ops._JOIN_OBJECTS_TEMPLATE),
@@ -158,10 +159,32 @@ class ToolGateway:
             cls._TOOL_HANDLERS[tool_name] = _make_handler(param_cls, template)
 
         async def _build_spec_handler(**kwargs):
-            from core.spec3d.pipeline import Spec3DPipeline
+            from core.blender_pipeline.executor import run_staged_pipeline_and_execute
+            from core.model_manager import ModelManager
+            
             mcp_mgr = cls._active_mcp_manager or MCPManager.get_instance() or MCPManager()
             mdl_mgr = cls._active_model_manager
-            return await Spec3DPipeline.process_build_spec(kwargs, mcp_mgr, model_manager=mdl_mgr)
+            
+            # Fallback: create model_manager if not set (lazy init)
+            if mdl_mgr is None:
+                from config.loader import load_system_config, load_model_registry
+                config = load_system_config()
+                registry = load_model_registry()
+                mdl_mgr = ModelManager(config, registry)
+                cls._active_model_manager = mdl_mgr
+            
+            description = kwargs.get("description") or kwargs.get("params", {}).get("name", "")
+            task_id = kwargs.get("task_id", "build_spec")
+            # Optional: use LLM for Stage 4.5 modifier intent (default: inference)
+            use_llm_modifiers = kwargs.get("use_llm_modifiers", False)
+            
+            return await run_staged_pipeline_and_execute(
+                description=description,
+                mcp_manager=mcp_mgr,
+                model_manager=mdl_mgr,
+                task_id=task_id,
+                use_llm_modifiers=use_llm_modifiers,
+            )
 
         async def _save_approved_handler(**kwargs):
             from core.spec3d.pipeline import Spec3DPipeline
@@ -544,6 +567,8 @@ class ToolGateway:
                 )
 
             call_params = dict(params)
+            # Pass task_id to handler so pipelines can use it for tracing
+            call_params["task_id"] = task_id
             if name == "fetch_rss":
                 if "feed_urls" not in call_params and "urls" in call_params:
                     call_params = {"feed_urls": call_params["urls"]}

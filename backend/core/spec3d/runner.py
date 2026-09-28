@@ -222,14 +222,40 @@ class HeadlessBlenderRunner:
             return True, metrics, blend_path
 
         except Exception as e:
-            logger.error(f"Failed to execute headless Blender: {e}")
+            logger.error(f"Failed to execute headless Blender: {repr(e)}")
             if process:
                 try:
                     process.kill()
                     await process.wait()
                 except Exception:
                     pass
-            return False, {"error": str(e)}, ""
+            # Sync fallback: asyncio.create_subprocess_exec can silently fail on some
+            # Windows configurations (e.g. ProactorEventLoop not fully initialised).
+            # Try subprocess.run as a last resort so we at least get stderr output.
+            try:
+                import subprocess
+                logger.info("Retrying headless Blender build via subprocess.run fallback")
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
+                )
+                if result.returncode == 0:
+                    metrics: Dict[str, Any] = {}
+                    if os.path.isfile(metrics_path):
+                        with open(metrics_path, "r", encoding="utf-8") as f:
+                            metrics = json.load(f)
+                    if os.path.isfile(blend_path):
+                        return True, metrics, blend_path
+                    return False, {"error": "Blender did not output a .blend file", "stderr": result.stderr[-400:]}, ""
+                logger.error(f"Blender subprocess fallback exit {result.returncode}: {result.stderr[-300:]}")
+                return False, {"error": f"Blender exit code {result.returncode}", "stderr": result.stderr[-800:]}, ""
+            except subprocess.TimeoutExpired:
+                return False, {"error": f"Build timed out after {timeout_seconds}s (sync fallback)"}, ""
+            except Exception as e2:
+                logger.error(f"Blender subprocess fallback also failed: {repr(e2)}")
+                return False, {"error": f"Headless Blender failed: {repr(e)} / fallback: {repr(e2)}"}, ""
 
         finally:
             if os.path.exists(script_path):

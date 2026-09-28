@@ -44,21 +44,61 @@ def get_state_db() -> sqlite3.Connection:
     return _get_connection(STATE_DB, synchronous="NORMAL")
 
 
-def _backup_db_pre_migrate(db_path: Path) -> Optional[Path]:
-    """Creates a pre-migration timestamped snapshot of the SQLite database if it exists and is non-empty."""
+# Maximum number of backups to retain per database
+MAX_BACKUPS_PER_DB = 3
+
+
+def _backup_db_pre_migrate(db_path: Path, force: bool = False) -> Optional[Path]:
+    """Creates a pre-migration timestamped snapshot of the SQLite database.
+    
+    Only creates backup if:
+    - force=True (explicit backup request)
+    - OR there are pending migrations to apply
+    
+    Maintains MAX_BACKUPS_PER_DB retention policy.
+    """
     if not db_path.exists() or db_path.stat().st_size == 0:
         return None
+    
     backup_dir = DB_DIR / ".sentinel_backup" / "db_pre_migrate"
     backup_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     target_path = backup_dir / f"{db_path.stem}_{timestamp}.sqlite"
+    
     try:
         shutil.copy2(db_path, target_path)
         logger.info(f"Created pre-migration backup for {db_path.name} at {target_path}")
+        
+        # Enforce retention policy - keep only MAX_BACKUPS_PER_DB most recent
+        _prune_old_backups(backup_dir, db_path.stem)
+        
         return target_path
     except Exception as e:
         logger.warning(f"Failed to create pre-migration backup for {db_path.name}: {e}")
         return None
+
+
+def _prune_old_backups(backup_dir: Path, db_stem: str) -> None:
+    """Remove old backups, keeping only MAX_BACKUPS_PER_DB most recent."""
+    pattern = f"{db_stem}_*.sqlite"
+    backups = sorted(backup_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    
+    for old_backup in backups[MAX_BACKUPS_PER_DB:]:
+        try:
+            old_backup.unlink()
+            logger.debug(f"Pruned old backup: {old_backup.name}")
+        except Exception as e:
+            logger.warning(f"Failed to prune backup {old_backup.name}: {e}")
+
+
+def _has_pending_migrations(conn: sqlite3.Connection, migration_path: Path) -> bool:
+    """Check if a migration needs to be applied."""
+    try:
+        cur = conn.execute("SELECT 1 FROM schema_migrations WHERE migration_name = ?", (migration_path.name,))
+        return cur.fetchone() is None
+    except sqlite3.OperationalError:
+        # Table doesn't exist yet, migration is pending
+        return True
 
 
 def _apply_migration(conn: sqlite3.Connection, sql_path: Path) -> None:
@@ -95,7 +135,7 @@ def _apply_migration(conn: sqlite3.Connection, sql_path: Path) -> None:
 
 def initialize_all_databases() -> None:
     """
-    Run on startup. Backs up existing databases before applying migrations.
+    Run on startup. Backs up existing databases ONLY if migrations are pending.
     Safe to call multiple times - verifies schema_migrations.
     """
     databases = [
@@ -106,14 +146,24 @@ def initialize_all_databases() -> None:
         (AUDIT_DB, MIGRATIONS_DIR / "audit_v1.sql"),
         (KNOWLEDGE_DB, MIGRATIONS_DIR / "knowledge_v1.sql"),
         (KNOWLEDGE_DB, MIGRATIONS_DIR / "mcp_catalog_v1.sql"),
+        (KNOWLEDGE_DB, MIGRATIONS_DIR / "dimension_decisions_v1.sql"),
     ]
 
-    # Pre-migration backup snapshot for each unique DB
-    backed_up_paths = set()
-    for db_path, _ in databases:
-        if db_path not in backed_up_paths:
-            _backup_db_pre_migrate(db_path)
-            backed_up_paths.add(db_path)
+    # Check which DBs have pending migrations BEFORE backing up
+    dbs_needing_backup = set()
+    for db_path, migration_path in databases:
+        if db_path.exists() and db_path not in dbs_needing_backup:
+            conn = _get_connection(db_path)
+            try:
+                if _has_pending_migrations(conn, migration_path):
+                    dbs_needing_backup.add(db_path)
+            finally:
+                conn.close()
+    
+    # Only backup DBs that actually have pending migrations
+    for db_path in dbs_needing_backup:
+        _backup_db_pre_migrate(db_path)
+        logger.info(f"Backed up {db_path.name} before applying pending migrations")
 
     for db_path, migration_path in databases:
         conn = _get_connection(db_path)

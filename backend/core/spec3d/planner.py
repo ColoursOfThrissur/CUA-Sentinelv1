@@ -134,6 +134,22 @@ def apply_deterministic_repairs(
         # Ensure profile radius values are non-negative
         for pt in spec.profile:
             pt.radius = max(0.0, pt.radius)
+        # Ensure minimum 3 profile points (schema requires min_length=3)
+        if len(spec.profile) == 2:
+            from .schema import ProfilePoint
+            bot, top = spec.profile[0], spec.profile[1]
+            mid_r = (bot.radius + top.radius) / 2.0
+            mid_h = (bot.height + top.height) / 2.0
+            spec.profile.insert(1, ProfilePoint(radius=mid_r, height=mid_h))
+        elif len(spec.profile) < 2:
+            from .schema import ProfilePoint
+            h = 0.1
+            r = 0.04
+            spec.profile = [
+                ProfilePoint(radius=r * 0.8, height=0.0),
+                ProfilePoint(radius=r, height=h * 0.5),
+                ProfilePoint(radius=r * 0.9, height=h),
+            ]
 
     elif isinstance(spec, HardSurfaceSpec):
         # Clamp modifier values
@@ -512,8 +528,9 @@ Do NOT include any text outside the JSON object.
             logger.warning(f"Pydantic validation failed: {e}")
             # Attempt partial recovery via deterministic repair
             try:
-                spec_obj = apply_deterministic_repairs(spec_cls.model_construct(**data), [])
-                spec_obj = spec_cls(**spec_obj.__dict__)
+                partial = spec_cls.model_construct(**data)
+                partial = apply_deterministic_repairs(partial, [])
+                spec_obj = spec_cls(**partial.__dict__)
             except Exception:
                 return None, 0.0
 

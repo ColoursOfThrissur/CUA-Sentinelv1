@@ -59,8 +59,8 @@ class EndpointAgent(BaseAgent):
         # Strictly guard against web search triggering on 3D modeling instructions
         blender_3d_keywords = (
             "blender", "create_box", "create_cylinder", "create_sphere", "create_cone",
-            "create_torus", "3d model", "build_spec", "desk lamp", "primitive", "mesh",
-            "subdivision", "cylinder", "sphere", "ground plane", "lamp head"
+            "create_torus", "3d model", "build_spec", "primitive", "mesh",
+            "subdivision", "cylinder", "sphere", "ground plane",
         )
         if any(kw in text for kw in blender_3d_keywords):
             return False
@@ -217,7 +217,7 @@ class EndpointAgent(BaseAgent):
                     }
 
             # Check for direct 3D build approval request
-            approve_match = re.search(r"\b(?:save\s+as\s+approved|approve(?:\s+build|\s+spec|\s+model)?)\s+([a-f0-9]{6,12})\b", prompt, re.IGNORECASE)
+            approve_match = re.search(r"\b(?:save\s+as\s+approved|approve(?:\s+build|\s+spec|\s+model)?)\s+([a-f0-90-9]{4,16})\b", prompt, re.IGNORECASE)
             if approve_match:
                 b_id = approve_match.group(1).lower()
                 from core.spec3d.pipeline import Spec3DPipeline
@@ -514,7 +514,7 @@ class EndpointAgent(BaseAgent):
 
                     matched_apps = []
                     app_keywords = {
-                        "blender": ["blender", "3d", "sphere", "spheres", "cube", "cubes", "cylinder", "cylinders", "cone", "cones", "torus", "mesh", "meshes", "bpy", "render", "viewport", "vertex", "vertices", "material", "primitive", "extrude", "bevel", "subdivision", "subsurf", "boolean", "mcp:blender:", "model", "modeling", "dog", "cat", "car", "character", "animal", "cup", "mug", "table", "chair", "robot", "vehicle", "house", "tree"],
+                        "blender": ["blender", "3d", "sphere", "spheres", "cube", "cubes", "cylinder", "cylinders", "cone", "cones", "torus", "mesh", "meshes", "bpy", "render", "viewport", "vertex", "vertices", "material", "primitive", "extrude", "bevel", "subdivision", "subsurf", "boolean", "mcp:blender:", "model", "modeling", "dog", "cat", "car", "character", "animal", "cup", "mug", "table", "chair", "robot", "vehicle", "house", "tree", "arcade", "cabinet", "machine", "kiosk", "vending"],
                         "filesystem": ["file", "files", "directory", "directories", "folder", "folders", "path", "desktop", "read_file", "write_file", "list_dir", "mcp:filesystem:"],
                         "github": ["github", "repo", "repository", "issue", "issues", "pull request", "pr", "commit", "branch", "fork", "mcp:github:"],
                         "postgres": ["postgres", "postgresql", "sql", "table", "schema", "query", "database", "mcp:postgres:"],
@@ -532,26 +532,9 @@ class EndpointAgent(BaseAgent):
                 if app_ids:
                     for aid in app_ids:
                         if aid == "blender":
-                            from core.spec3d.library import SpecLibrary
-                            SpecLibrary.initialize_library()
-                            mcp_tool_lines.append("- `blender:build_spec`: [RECOMMENDED for any 3D object] LLM-planned, headless-verified 3D model builder. Describe any object in natural language. The planner generates the full spec, verifies it, compiles it deterministically in Blender, and loads it into the live scene. (args: description: str — natural language object description, e.g. 'a tall giraffe', 'a ceramic wine glass', 'a wooden dining chair'; category: str optional hint)")
-                            mcp_tool_lines.append("- `blender:create_box`: Create a 3D box/cube mesh (args: name: str, size: [x,y,z] or scalar, location: [x,y,z], rotation: [rx,ry,rz] opt)")
-                            mcp_tool_lines.append("- `blender:create_sphere`: Create a 3D UV sphere mesh (args: name: str, radius: float, location: [x,y,z])")
-                            mcp_tool_lines.append("- `blender:create_cylinder`: Create a 3D cylinder or regular polygonal prism mesh (args: name: str, radius: float, depth: float, location: [x,y,z], rotation: [rx,ry,rz] opt, vertices: int opt — e.g. 6 for hexagonal prism, 32 for cylinder)")
-                            mcp_tool_lines.append("- `blender:create_cone`: Create a 3D cone mesh for roofs/noses/trees (args: name: str, radius1: float, depth: float, location: [x,y,z], rotation: [rx,ry,rz] opt)")
-                            mcp_tool_lines.append("- `blender:create_torus`: Create a 3D torus/donut mesh for tires/rings/handles (args: name: str, major_radius: float, minor_radius: float, location: [x,y,z], rotation: [rx,ry,rz] opt)")
-                            mcp_tool_lines.append("- `blender:apply_subdivision`: Apply subdivision surface modifier to smooth blocky meshes into organic curves (args: name: str, levels: int 1-4)")
-                            mcp_tool_lines.append("- `blender:apply_boolean`: Carve or join meshes using boolean operations (args: name: str, target_name: str, operation: 'DIFFERENCE'|'UNION'|'INTERSECT', delete_target: bool)")
-                            mcp_tool_lines.append("- `blender:apply_bevel`: Round sharp edges with bevel modifier (args: name: str, width: float, segments: int)")
-                            mcp_tool_lines.append("- `blender:set_smooth_shading`: Smooth polygon shading for realistic appearance (args: name: str, smooth: bool)")
-                            mcp_tool_lines.append("- `blender:set_material`: Apply PBR color, metallic, and roughness material (args: name: str, color: [r,g,b,a] 0-1, metallic: 0-1, roughness: 0-1, emission_color: [r,g,b] opt)")
-                            mcp_tool_lines.append("- `blender:join_objects`: Merge multiple mesh objects into one (args: names: [str, ...], target_name: str opt)")
-                            mcp_tool_lines.append("- `blender:delete_object`: Remove an object from the scene (args: name: str)")
-                            mcp_tool_lines.append("- `blender:clear_scene`: Clear all objects in the scene (args: keep_camera_and_lights: bool)")
-                            mcp_tool_lines.append("- `blender:create_light`: Add light to illuminate the scene (args: name: str, type: 'POINT'|'SUN'|'SPOT'|'AREA', energy: float, location: [x,y,z], color: [r,g,b] opt)")
-                            mcp_tool_lines.append("- `blender:create_camera`: Position scene camera (args: name: str, location: [x,y,z], rotation: [rx,ry,rz])")
-                            mcp_tool_lines.append("- `blender:set_transform`: Update location, rotation, or scale of an object (args: name: str, location: [x,y,z], rotation: [rx,ry,rz], scale: [sx,sy,sz] or scalar)")
-                            mcp_tool_lines.append("- `blender:get_manifest`: Inspect all 3D objects currently in the Blender scene (args: prefix: str opt)")
+                            # Only expose build_spec - all 3D generation goes through staged pipeline
+                            mcp_tool_lines.append("- `blender:build_spec`: Build ANY 3D object from natural language. Describe what you want (e.g. 'a communication tower with radar dish and support struts', 'a training dummy', 'an arcade cabinet'). The pipeline handles all geometry, positioning, and materials automatically. (args: description: str)")
+                            mcp_tool_lines.append("- `blender:get_manifest`: List all objects currently in the Blender scene (args: none)")
 
                         app_tools = mcp_mgr.get_tools_for_app(aid)
                         # Prioritize key execution and creation tools
@@ -605,25 +588,86 @@ class EndpointAgent(BaseAgent):
                     + "\n</connected_tools>\n\n"
                     "<action_guidance>\n"
                     "- When the user asks you to create, model, build, or manipulate 3D objects, DO NOT provide generic text or outside software recommendations.\n"
-                    "- For organic animals/creatures (e.g. dog, cat, penguin, bird, giraffe), characters, figurines, or complete objects/furniture/vessels (table, mug, wine glass, vase, chest, car), USE 'blender:build_spec' as the primary tool: {\"action\": \"call_tool\", \"tool\": \"blender:build_spec\", \"args\": {\"description\": \"<detailed object description>\"}}. The pipeline plans, verifies geometry, generates PBR materials, smooths shading, configures studio lighting, and loads the model into Blender automatically.\n"
-                    "- CRITICAL: 'blender:build_spec' is an ALL-IN-ONE pipeline. Always invoke it as a standalone action. DO NOT follow it up with 'blender:set_material' or other primitive tools in a multi-step plan, because the compiled mesh parts inside 'build_spec' are already textured, shaded, and managed internally by the pipeline.\n"
-                    "- Use primitive composition tools ('blender:create_box', 'blender:create_sphere', 'blender:set_material', etc.) ONLY when building a custom geometric scene step-by-step from raw primitives without 'build_spec'.\n"
-                    "- SPATIAL COORDINATES & STACKING: Blender primitive origin locations are at the object's geometric center (centroid). An object with height H placed on top of a surface at height Z must have its center at `Z + H/2`. (e.g., a 40cm cylinder sitting on a 2cm base must have its center at `2 + 40/2 = 22cm`, not 2 or 3).\n"
-                    "- HORIZONTAL ALIGNMENT & ROTATION: A cylinder's (and regular polygonal prism's) depth axis is Z by default. To lie along the X-axis, set rotation to [0, 90, 0]. To lie along the Y-axis, use [90, 0, 0]. Any object described as 'aligned along the X/Y-axis' requires this rotation — do not rely on position alone. For a box aligned along X with thickness T and cross-section DxD, set size to [T, D, D].\n"
-                    "- STRICT JSON SYNTAX: In tool arguments, always provide evaluated plain numbers (e.g. `22` or `43.0`). NEVER write arithmetic expressions like `2 + 2/2` or `40 + 2/2` in JSON.\n"
-                    "- Use 'blender:set_material' to give objects appropriate colors and materials (e.g. red car paint, black rubber tires, silver metallic wheels, ceramic cup).\n"
-                    "- Use 'blender:apply_subdivision' with levels 1-2 to turn blocky shapes into smooth organic curved surfaces.\n"
-                    "- Use 'blender:apply_boolean' with 'DIFFERENCE' to carve cutouts (windows, holes, hollow interiors) or 'UNION' to fuse objects.\n"
+                    "- NEVER respond to a build/create request with 'blender:get_manifest'. get_manifest is read-only inspection. It does not build anything.\n"
+                    "- For organic animals/creatures, characters, figurines, complete objects/furniture/vessels, OR complex multi-part assemblies (arcade machines, vending machines, ATMs, kiosks, control panels, etc.) with no explicit dimensions, USE 'blender:build_spec' as the primary tool. The pipeline plans, verifies geometry, generates PBR materials, smooths shading, configures studio lighting, and loads the model into Blender automatically.\n"
+                    "- CRITICAL: 'blender:build_spec' is an ALL-IN-ONE pipeline that builds the ENTIRE object from a SINGLE description. Pass the COMPLETE user request as the description argument. DO NOT split the object into multiple build_spec calls. DO NOT follow build_spec with primitive tools. ONE build_spec call = ONE complete object.\n"
+                    "- Use primitive composition tools ('blender:create_box', 'blender:create_cylinder', 'blender:set_material', etc.) when: (a) the user provides exact numeric dimensions, (b) 'blender:build_spec' previously failed or returned an error, or (c) the user explicitly asks for step-by-step primitive construction. In these cases, generate a full multi-step plan with all primitives, booleans, materials, and camera/light.\n"
+                    "\n"
+                    "PLANNING A COMPLEX MODEL (primitive composition)\n"
+                    "- Before writing any tool calls, mentally decompose the object into named parts. Identify: (1) the structural base/body, (2) secondary components that attach to it, (3) detail parts (handles, knobs, caps, feet), (4) any hollow cavities or cutouts.\n"
+                    "- Establish a single consistent unit scale for the whole model (e.g. 1 unit = 1 cm). All parts must use the same scale.\n"
+                    "- Build order: create structural/base parts first, then attach secondary parts, then apply booleans (DIFFERENCE/UNION), then apply materials, then smooth shading, then camera and light last.\n"
+                    "- Boolean operations require BOTH target objects to already exist in the scene. Always create the cutter/inner object before calling apply_boolean.\n"
+                    "- Use clear, descriptive names for every object (e.g. 'body', 'lid', 'handle_left', 'leg_front_left'). Boolean cutters should be named with a '_cutter' suffix so they are identifiable before deletion.\n"
+                    "- For a fresh build, start with 'blender:clear_scene' (keep_camera_and_lights: false) to avoid leftover objects from previous builds.\n"
+                    "\n"
+                    "SPATIAL POSITIONING\n"
+                    "- Every primitive's origin is at its geometric center. Always compute positions from center, not from edges or faces.\n"
+                    "- Stacking (vertical): B_center_z = A_center_z + A_half + B_half, where half = depth/2 for cylinders/boxes, radius for spheres.\n"
+                    "- Side-by-side (horizontal): B_center_x = A_center_x ± (A_half + B_half). Same principle applies on Y-axis.\n"
+                    "- Chain rule: each successive part's center = previous_center ± previous_half + current_half. Apply repeatedly for multi-part chains.\n"
+                    "- Sphere half-extent = radius in all directions. Box half-extent = size/2 per axis. Cone base is at center_z - depth/2, tip at center_z + depth/2.\n"
+                    "- Torus center is its geometric center; major_radius is the ring radius, minor_radius is the tube thickness. Torus lies flat (XY plane) by default.\n"
+                    "- Always pre-compute all positions as plain evaluated numbers before writing JSON. NEVER write arithmetic expressions inside JSON values.\n"
+                    "\n"
+                    "SYMMETRY\n"
+                    "- For mirrored pairs (left/right legs, handles, wheels, ears), compute one side's center then negate the relevant axis for the other: right_x = +offset, left_x = -offset.\n"
+                    "- For radially symmetric parts (e.g. 4 legs of a table), place them at ±offset on both X and Y axes.\n"
+                    "\n"
+                    "HOLLOW OBJECTS\n"
+                    "- To hollow any vessel: create outer primitive, then create inner primitive (the cavity), then apply boolean DIFFERENCE on the outer using the inner as target.\n"
+                    "- inner_radius = outer_radius - wall_thickness.\n"
+                    "- Flat-bottomed open vessel (cup, pot, vase): inner_depth = outer_depth - wall_thickness. inner_center_z = outer_center_z + wall_thickness/2. inner cutter top = outer_center_z + inner_depth/2 = outer_top - wall_thickness/2 (flush with inner wall, NOT past the rim). To guarantee the boolean cuts cleanly through the open face, extend the cutter 0.1 past the outer rim: inner_depth += 0.1, inner_center_z += 0.05.\n"
+                    "- Fully closed vessel: inner_depth = outer_depth - 2*wall_thickness. inner_center_z = outer_center_z.\n"
+                    "- Example (outer_r=5, outer_depth=20, wall=0.3, outer_center_z=0): inner_r=4.7, inner_depth=19.8, inner_center_z=0.2. (inner_depth = 20-0.3+0.1=19.8, inner_center_z = 0+0.3/2+0.05=0.2)\n"
+                    "- NEVER place inner_center_z = outer_center_z for a flat-bottomed vessel.\n"
+                    "- Set delete_target: true in apply_boolean to remove the cutter after the operation.\n"
+                    "\n"
+                    "ROD / SHAFT / INSERT INSIDE A VESSEL\n"
+                    "- Any part that slides inside a cavity must have radius < cavity_inner_radius. Use clearance = 0.2 unless specified: insert_radius = inner_cavity_radius - 0.2.\n"
+                    "- 'N units above the bottom': part_center_z = (vessel_center_z - vessel_depth/2) + N + part_depth/2.\n"
+                    "- Example (vessel_center_z=0, vessel_depth=20, N=5, plate_depth=0.2): plate_center_z = (0-10)+5+0.1 = -4.9.\n"
+                    "- Rod flush with vessel top: rod_center_z = vessel_center_z + vessel_depth/2 - rod_depth/2.\n"
+                    "- Example (vessel_center_z=0, vessel_depth=20, rod_depth=22): rod_center_z = 0+10-11 = -1.\n"
+                    "- Plate at rod bottom tip: plate_center_z = rod_center_z - rod_depth/2 + plate_depth/2.\n"
+                    "- Applies to: press plungers, pistons, syringes, pestles, stoppers, caps that fit inside a tube.\n"
+                    "\n"
+                    "ORIENTATION\n"
+                    "- Cylinders are vertical (Z-axis) by default. Leave rotation [0,0,0] for upright columns, rods, tubes, legs, bottles.\n"
+                    "- Horizontal along X-axis (bar, axle, handle, rolling pin): rotation [0,90,0].\n"
+                    "- Horizontal along Y-axis: rotation [90,0,0].\n"
+                    "- Cones point upward by default (tip at +Z). To make a downward-pointing cone (funnel, spike): rotation [180,0,0].\n"
+                    "- Torus lies flat (XY plane) by default. To stand it upright like a wheel: rotation [90,0,0].\n"
+                    "\n"
+                    "SHAPING & DETAIL\n"
+                    "- Use 'blender:apply_bevel' on sharp-edged parts to add realistic edge rounding (width = 5-10% of the part's smallest dimension, segments=2-3).\n"
+                    "- Use 'blender:apply_subdivision' (levels 1-2) on any part that should appear smooth or organic rather than faceted.\n"
+                    "- Use 'blender:set_smooth_shading' after subdivision to eliminate visible polygon edges.\n"
+                    "- Use 'blender:apply_boolean' UNION to fuse two parts into one solid mesh when they should appear seamless.\n"
+                    "- Use 'blender:join_objects' to merge finished parts into a single object for export or simplicity.\n"
+                    "\n"
+                    "MATERIALS\n"
+                    "- Call 'blender:set_material' for every mesh. Identify the real-world material of each part, then set PBR values accordingly.\n"
+                    "- metallic=1.0 for all metals; metallic=0 for all non-metals.\n"
+                    "- roughness by surface finish: mirror/polished=0.0-0.05, glossy=0.1, brushed=0.3-0.4, bare industrial=0.3, painted=0.15-0.2, matte=0.6-0.7, rough/cast=0.7-0.9, rubber=0.9.\n"
+                    "- color: match the real-world appearance of the part. Use neutral grey [0.5,0.5,0.5,1] only when the object has no defined color. For user-specified colors, convert the color name to an approximate [r,g,b,1] value.\n"
+                    "- Transparent/glass parts: color=[0.8,0.95,1.0,alpha], metallic=0, roughness=0.0. Alpha must be ≤0.2 for visible transparency. Frosted glass: roughness=0.15, alpha=0.4.\n"
+                    "- Emissive parts (screens, LEDs, neon): add emission_color=[r,g,b] to set_material.\n"
+                    "\n"
+                    "CAMERA & LIGHTING\n"
+                    "- Every build plan MUST end with 'blender:create_light' and 'blender:create_camera', unless the scene already has them.\n"
+                    "- Camera distance = 3x the object's largest dimension. Place at roughly equal X and -Y offset, elevated 30-45 degrees above horizon for a 3/4 view.\n"
+                    "- Camera rotation for a 3/4 view: rotation=[65, 0, 45]. Do NOT use rotation=[0,90,0] (top-down). Do NOT use rotation=[90,0,0] (flat front view).\n"
+                    "- For small objects (< 10 units): POINT light, energy 200-500. Medium (10-50 units): POINT or SUN, energy 500-2000. Large/architectural: SUN light.\n"
+                    "- Place the light above and to one side, not directly overhead, to create shadow and depth.\n"
+                    "\n"
                     "- To execute a single tool:\n"
                     "```json\n"
                     '{"action": "call_tool", "tool": "<tool_name>", "args": { ... }}\n'
                     "```\n"
-                    "- To execute a sequence of actions or a multi-step 3D modeling plan:\n"
+                    "- To execute a multi-step plan:\n"
                     "```json\n"
-                    '{"action": "plan", "steps": [\n'
-                    '  {"tool": "<tool_name>", "args": { ... }},\n'
-                    '  {"tool": "<tool_name>", "args": { ... }}\n'
-                    ']}\n'
+                    '{"action": "plan", "steps": [{"tool": "<tool_name>", "args": { ... }}, ...]}\n'
                     "```\n"
                     "</action_guidance>"
                 )
@@ -686,30 +730,8 @@ class EndpointAgent(BaseAgent):
                         build_sealed_envelope(ctx, origin="unknown")
                     )
 
-            # P0.2: Use call_llm for fixed-order prompt assembly
-            try:
-                response = await self.call_llm(
-                    task_id=task_id,
-                    system_rules=active_system_prompt,
-                    task_prompt=f"{prompt}\n\nAnswer the user's request directly using any relevant context provided above.",
-                    facts=trusted_facts if trusted_facts else None,
-                    untrusted_blocks=untrusted_blocks if untrusted_blocks else None,
-                    model_id=model_id,
-                    lease_id=lease_id,
-                    lease_generation=lease_generation,
-                    context_budget=claim.context_budget,
-                    temperature=0.7,
-                )
-            except Exception as e:
-                logger.error(f"EndpointAgent LLM generation failed: {e}")
-                return {
-                    "response": f"⚠️ **AI Service Offline or Busy**\n\nCould not generate response ({e}). Please ensure Ollama is running (`ollama serve`).",
-                    "model_used": model_id,
-                }
-
-            # Robust tool extraction from LLM response (supports fenced or raw JSON, plus arithmetic expressions in arrays)
-            steps_to_execute = []
-
+            # JSON extraction helpers — defined here so they are available for both
+            # the prompt pre-scan below AND the response parsing after call_llm.
             def _try_parse_tool_json(json_str: str) -> Optional[dict]:
                 if not json_str:
                     return None
@@ -812,6 +834,43 @@ class EndpointAgent(BaseAgent):
                                         return text[start:i+1]
                 return None
 
+            # Short-circuit: if the prompt itself contains a ready-to-execute plan
+            # (user pasted a JSON plan directly into chat), extract and run it immediately
+            # without burning an LLM turn. This handles the case where the UI renders
+            # the plan JSON and the user re-submits it.
+            _prompt_plan_steps: list = []
+            _prompt_json_raw = _extract_outer_json_object(prompt)
+            if _prompt_json_raw:
+                _prompt_obj = _try_parse_tool_json(_prompt_json_raw)
+                if _prompt_obj and (_prompt_obj.get("steps") or _prompt_obj.get("actions")):
+                    for _s in (_prompt_obj.get("steps") or _prompt_obj.get("actions") or []):
+                        if isinstance(_s, dict) and _s.get("tool"):
+                            _prompt_plan_steps.append((_s["tool"], _s.get("args") or {}))
+
+            # P0.2: Use call_llm for fixed-order prompt assembly
+            try:
+                response = await self.call_llm(
+                    task_id=task_id,
+                    system_rules=active_system_prompt,
+                    task_prompt=f"{prompt}\n\nAnswer the user's request directly using any relevant context provided above.",
+                    facts=trusted_facts if trusted_facts else None,
+                    untrusted_blocks=untrusted_blocks if untrusted_blocks else None,
+                    model_id=model_id,
+                    lease_id=lease_id,
+                    lease_generation=lease_generation,
+                    context_budget=claim.context_budget,
+                    temperature=0.7,
+                )
+            except Exception as e:
+                logger.error(f"EndpointAgent LLM generation failed: {e}")
+                return {
+                    "response": f"⚠️ **AI Service Offline or Busy**\n\nCould not generate response ({e}). Please ensure Ollama is running (`ollama serve`).",
+                    "model_used": model_id,
+                }
+
+            # Extract executable steps from LLM response
+            steps_to_execute = []
+
             # 1. Check for batch/plan action: {"action": "plan", "steps": [...]} in markdown code blocks
             plan_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?"(?:steps|actions)"\s*:\s*\[[\s\S]*?\][\s\S]*?\})\s*```', response)
             if plan_match:
@@ -840,6 +899,56 @@ class EndpointAgent(BaseAgent):
                                     steps_to_execute.append((s.get("tool"), s.get("args") or {}))
                         elif obj.get("tool"):
                             steps_to_execute.append((obj.get("tool"), obj.get("args") or {}))
+
+            # 4. If the LLM produced nothing executable but the prompt itself contained
+            # a valid plan (user pasted JSON directly), use that as the execution plan.
+            if not steps_to_execute and _prompt_plan_steps:
+                steps_to_execute = _prompt_plan_steps
+                logger.info(f"[task={task_id}] Executing plan extracted directly from prompt ({len(steps_to_execute)} steps)")
+
+            # Route multi-part primitive composition through staged pipeline.
+            # When LLM emits primitives instead of build_spec, re-route through
+            # our new staged pipeline which has correct socket resolution.
+            _is_primitive_plan = (
+                steps_to_execute
+                and any(t.startswith("blender:create_") for t, _ in steps_to_execute)
+                and not any(t == "blender:build_spec" for t, _ in steps_to_execute)
+            )
+            if _is_primitive_plan:
+                try:
+                    from core.blender_pipeline.executor import run_staged_pipeline_and_execute
+                    mcp_mgr = getattr(self, "_mcp_manager", None)
+                    logger.info(f"[task={task_id}] Re-routing primitive plan through staged pipeline")
+                    _staged_result = await run_staged_pipeline_and_execute(
+                        description=prompt,
+                        mcp_manager=mcp_mgr,
+                        model_manager=self.model_manager,
+                        task_id=task_id,
+                    )
+                    if _staged_result.get("ok"):
+                        # Staged pipeline executed successfully - clear steps_to_execute
+                        # so we don't double-execute, and record the result
+                        executed_tool_results.append(("blender:build_spec", {"data": _staged_result}))
+                        executed_summaries.append(
+                            f"✅ `blender:build_spec`: Built {_staged_result.get('parts_count', '?')} parts, "
+                            f"status={_staged_result.get('status', 'OK')}"
+                        )
+                        steps_to_execute = []  # Clear - already executed via staged pipeline
+                        logger.info(
+                            f"[task={task_id}] Staged pipeline succeeded: "
+                            f"{_staged_result.get('executed_steps')} steps executed"
+                        )
+                    else:
+                        logger.warning(
+                            f"[task={task_id}] Staged pipeline failed: {_staged_result.get('error')}, "
+                            f"falling back to direct primitive execution"
+                        )
+                        # Fall through to execute primitives directly
+                except Exception as _sp_err:
+                    logger.warning(
+                        f"[task={task_id}] Staged pipeline error ({_sp_err}), "
+                        f"falling back to direct primitive execution"
+                    )
 
             # Execute extracted steps
             if steps_to_execute:
@@ -916,6 +1025,87 @@ class EndpointAgent(BaseAgent):
                         logger.warning(f"Failed to execute step {tool_to_call}: {call_err}")
                         executed_summaries.append(f"❌ `{tool_to_call}` error: {call_err}")
 
+                # Mandatory post-plan spatial verification — structurally unavoidable,
+                # runs after every primitive plan regardless of how the plan was produced.
+                if any(t.startswith("blender:") for t, _ in steps_to_execute):
+                    try:
+                        from core.assembly_verification import AssemblyVerificationGate
+                        from core.scene_transaction import SceneTransaction
+                        mcp_bridge = getattr(self, "_mcp_manager", None)
+                        if mcp_bridge is not None:
+                            verifier = AssemblyVerificationGate(blender_bridge=mcp_bridge)
+                            # Collect every object name touched by this plan.
+                            # Boolean cutter names (suffixed _cutter or used as target_name
+                            # in apply_boolean steps) are excluded from interpenetration checks
+                            # because their overlap is intentional.
+                            _boolean_targets = [
+                                a.get("target_name")
+                                for t, a in steps_to_execute
+                                if t == "blender:apply_boolean" and a.get("target_name")
+                            ]
+                            _touched_names = [
+                                a.get("name")
+                                for t, a in steps_to_execute
+                                if a.get("name") and t not in (
+                                    "blender:delete_object",
+                                    "blender:clear_scene",
+                                    "blender:create_light",
+                                    "blender:create_camera",
+                                )
+                            ]
+                        # Detect whether the object is free-floating/symmetric (no ground plane).
+                            # Primary source: rests_on_surface field on the AssemblyGraph, set by
+                            # the LLM reasoning about the object's physical nature at decomposition
+                            # time — not from prompt phrasing.
+                            # Fallback for primitive-composition plans (no graph): check whether
+                            # every create_ step has a horizontal rotation (all axes along X/Y),
+                            # which is the structural signature of a dumbbell/axle/ring.
+                            _origin_centered = False
+                            # Check if any executed tool returned a graph with rests_on_surface=False
+                            for _t, _r in executed_tool_results:
+                                _d = _r.get("data") or {}
+                                if isinstance(_d.get("rests_on_surface"), bool):
+                                    _origin_centered = not _d["rests_on_surface"]
+                                    break
+                            # Primitive-composition fallback: all non-boolean cylinders are horizontal
+                            if not _origin_centered:
+                                _create_steps = [
+                                    a for t, a in steps_to_execute
+                                    if t == "blender:create_cylinder"
+                                ]
+                                if _create_steps and all(
+                                    abs(float((a.get("rotation") or [0, 0, 0])[1])) >= 85
+                                    for a in _create_steps
+                                ):
+                                    _origin_centered = True
+                            v_res = await verifier.verify_flat_object_set(
+                                object_names=_touched_names,
+                                task_id=task_id,
+                                boolean_targets=_boolean_targets,
+                                origin_centered=_origin_centered,
+                            )
+                            if not v_res.get("ok"):
+                                logger.warning(
+                                    f"[task={task_id}] Post-plan verification failed: {v_res.get('error')}. "
+                                    f"Initiating rollback of {len(_touched_names)} objects."
+                                )
+                                txn = SceneTransaction(tool_executor=self)
+                                await txn.rollback()
+                                self.update_step_status(step_id, "FAILED", {"verification_error": v_res.get("error")})
+                                return {
+                                    "response": (
+                                        f"\u26a0\ufe0f **Spatial Verification Failed** \u2014 build rolled back.\n\n"
+                                        f"{v_res.get('error')}\n\n"
+                                        "The scene has been restored to its previous state. "
+                                        "Please revise the geometry and try again."
+                                    ),
+                                    "model_used": model_id,
+                                    "verification_failed": True,
+                                    "verification": v_res,
+                                }
+                    except Exception as _vfy_err:
+                        logger.warning(f"[task={task_id}] Post-plan verification skipped: {_vfy_err}")
+
                 # Progressive Disclosure Follow-Up Turn:
                 # If search_tools discovered schemas, give LLM a follow-up turn with surfaced schemas
                 discovered_searches = [
@@ -970,9 +1160,24 @@ class EndpointAgent(BaseAgent):
 
                 # Grounded Observation Synthesis (Claude Code QueryEngine pattern)
                 # Feed real observations back into LLM so it reflects actual tool outcomes
+                _blender_primitive_tools = {
+                    "blender:create_cylinder", "blender:create_box", "blender:create_sphere",
+                    "blender:create_cone", "blender:create_torus", "blender:apply_boolean",
+                    "blender:set_material", "blender:create_light", "blender:create_camera",
+                    "blender:clear_scene", "blender:apply_subdivision", "blender:apply_bevel",
+                    "blender:set_smooth_shading", "blender:join_objects",
+                }
                 has_substantive_result = any(
-                    isinstance(r.get("data"), dict) and ("build_id" in r["data"] or "total_polys" in r["data"] or "poly_count" in r["data"])
-                    for _, r in executed_tool_results
+                    (
+                        isinstance(r.get("data"), dict)
+                        and (
+                            "build_id" in r["data"]
+                            or "total_polys" in r["data"]
+                            or "poly_count" in r["data"]
+                            or (r["data"].get("ok") is True and t in _blender_primitive_tools)
+                        )
+                    )
+                    for t, r in executed_tool_results
                 )
                 if has_substantive_result:
                     obs_payloads = []
@@ -983,15 +1188,48 @@ class EndpointAgent(BaseAgent):
                         else:
                             obs_payloads.append(f"Action: `{t_name}`\nResult: {d or t_res.get('reason')}")
 
+                    # Determine if this is a build_spec result or primitive composition
+                    _is_build_spec = any(
+                        isinstance(r.get("data"), dict) and "build_id" in r["data"]
+                        for _, r in executed_tool_results
+                    )
+                    if _is_build_spec:
+                        _synth_instructions = (
+                            "Write a clear, confident response confirming the 3D model was built and loaded. "
+                            "Mention the model name, polygon count, and quality verification status. "
+                            "End your response with exactly one line in this format: 'build_id: <the_actual_build_id_value>'. "
+                            "Do NOT output raw JSON blocks. Do NOT write 'save as approved' in your response."
+                        )
+                    else:
+                        _synth_instructions = (
+                            "Write a clear, confident response summarising what was built in Blender. "
+                            "List each object created (name, type, location) based strictly on the observations above. "
+                            "Do NOT fabricate polygon counts or build IDs that are not in the observations. "
+                            "Do NOT output raw JSON blocks."
+                        )
                     synth_task = (
                         f"The user originally requested: {prompt}\n\n"
                         f"The system executed the required tools with these real observations:\n"
                         + "\n---\n".join(obs_payloads)
-                        + "\n\nInstructions: Write a clear, confident response confirming the 3D model was built and loaded. "
-                        "Mention the model name, polygon count, quality verification status, and explicitly include: "
-                        "'build_id: <build_id>' and 'save as approved <build_id>'. "
-                        "Do NOT output raw JSON blocks."
+                        + f"\n\nInstructions: {_synth_instructions}"
                     )
+                    # Honesty note: surface any resolver-estimated dimensions to the user
+                    estimated_dims = []
+                    for t_name, t_res in executed_tool_results:
+                        d = t_res.get("data") or {}
+                        for part_key, sources in (d.get("_dimension_sources") or {}).items():
+                            if isinstance(sources, dict):
+                                for dim_name, src in sources.items():
+                                    if src not in ("user_stated", "cache"):
+                                        estimated_dims.append(f"{part_key}.{dim_name}")
+                            elif isinstance(sources, str) and sources not in ("user_stated", "cache"):
+                                estimated_dims.append(part_key)
+                    if estimated_dims:
+                        synth_task += (
+                            f"\n\nNote: the following dimensions were not specified by the user and were "
+                            f"estimated from prior knowledge: {', '.join(estimated_dims)}. "
+                            "Mention this briefly at the end of your response."
+                        )
                     try:
                         grounded_text = await self.call_llm(
                             task_id=task_id,

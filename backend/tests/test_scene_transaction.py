@@ -41,8 +41,20 @@ async def test_scene_transaction_atomic_rollback_on_exception():
             deleted_calls.append(args.get("name"))
         return {"status": "ok", "data": {"ok": True}}
 
+    async def mock_internal(op, kwargs):
+        code = kwargs.get("code", "")
+        # Track safe deletes from SceneTransaction rollback
+        if "bpy.data.objects.remove" in code and "sentinel_generation_id" in code:
+            import re
+            match = re.search(r'"name":\s*"([^"]+)"', code)
+            if match:
+                deleted_calls.append(match.group(1))
+            return {"ok": True, "deleted": True}
+        return {"ok": True}
+
     mock_bridge = AsyncMock()
     mock_bridge.execute_tool = mock_execute
+    mock_bridge.call_internal = mock_internal
 
     txn = SceneTransaction(tool_executor=mock_bridge)
 
@@ -77,8 +89,20 @@ async def test_assembly_resolver_rolls_back_on_mid_execution_error():
             return {"status": "ok", "data": {"ok": True}}
         return {"status": "ok", "data": {"ok": True}}
 
+    async def mock_internal(op, kwargs):
+        code = kwargs.get("code", "")
+        # Track safe deletes from SceneTransaction rollback
+        if "bpy.data.objects.remove" in code and "sentinel_generation_id" in code:
+            import re
+            match = re.search(r'"name":\s*"([^"]+)"', code)
+            if match:
+                deleted_calls.append(match.group(1))
+            return {"ok": True, "deleted": True}
+        return {"ok": True}
+
     mock_bridge = AsyncMock()
     mock_bridge.execute_tool = mock_execute
+    mock_bridge.call_internal = mock_internal
 
     resolver = AssemblyResolver(mock_bridge)
 

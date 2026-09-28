@@ -113,7 +113,7 @@ class ProjectRepairAgent(BaseAgent):
 
                 self.update_step_status(
                     step_id, "FAILED",
-                    error="Verification checks failed. Snapshot restored."
+                    output_summary={"error": "Verification checks failed. Snapshot restored."}
                 )
 
                 return {
@@ -146,7 +146,7 @@ class ProjectRepairAgent(BaseAgent):
 
             self.update_step_status(
                 step_id, "COMPLETED",
-                result_payload={"files_updated": len(written_files), "post_health": post_health}
+                output_summary={"files_updated": len(written_files), "post_health": post_health}
             )
 
             return {
@@ -161,5 +161,5 @@ class ProjectRepairAgent(BaseAgent):
             logger.error(f"ProjectRepairAgent: Error during repair for {project_name}: {err}")
             if backup_path:
                 project_backup_manager.restore_snapshot(target_path, backup_task_id)
-            self.update_step_status(step_id, "FAILED", error=str(err))
+            self.update_step_status(step_id, "FAILED", output_summary={"error": str(err)})
             return {"status": "ERROR", "error": str(err)}

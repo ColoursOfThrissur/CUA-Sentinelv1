@@ -339,10 +339,11 @@ class DependencyPlanRepository:
         )
 
         conn = get_operational_db()
+        inserted = False
         try:
-            conn.execute(
+            cursor = conn.execute(
                 """
-                INSERT INTO dependency_change_plans (
+                INSERT OR IGNORE INTO dependency_change_plans (
                     plan_id, project_path, ecosystem, package_name, requested_spec,
                     reason, evidence_json, manifest_path, lockfile_path,
                     manifest_before_hash, lockfile_before_hash, command_json,
@@ -358,8 +359,13 @@ class DependencyPlanRepository:
                 ),
             )
             conn.commit()
+            inserted = cursor.rowcount > 0
         finally:
             conn.close()
+
+        if not inserted:
+            # Duplicate plan_hash — already planned, no audit noise needed
+            return plan
 
         _record_audit_event(
             action_type="DEPENDENCY_PLAN_CREATED",

@@ -282,24 +282,32 @@ export default function ChatPanel({ messages, input, loading, webEnabled, pendin
                   if (!planMatch) return null;
                   try {
                     let cleanedJson = planMatch[1];
-                    const mathPattern = /([\[,:]\s*)([\s0-9\.\+\-\*\/\(\)]*[\+\-\*\/][\s0-9\.\+\-\*\/\(\)]*?)(\s*[,\]\}])/g;
-                    for (let pass = 0; pass < 5; pass++) {
-                      const next = cleanedJson.replace(mathPattern, (match: string, p1: string, expr: string, p3: string) => {
-                        try {
-                          if (/^[\s0-9\.\+\-\*\/\(\)]+$/.test(expr)) {
-                            // eslint-disable-next-line no-new-func
-                            const val = Function('"use strict"; return (' + expr + ')')();
-                            if (typeof val === 'number' && !isNaN(val) && isFinite(val)) {
-                              return p1 + ' ' + (Math.round(val * 10000) / 10000) + p3;
+                    // Only run math sanitizer if bare JSON.parse fails first
+                    let planObj: any;
+                    try {
+                      planObj = JSON.parse(cleanedJson);
+                    } catch {
+                      // Strip content inside quoted strings before applying math regex
+                      // so we don't corrupt material description strings like "color=[0.6,0.6,0.62,1]"
+                      const mathPattern = /(?<!"[^"]*)(\[\s*)([\s0-9\.\+\-\*\/\(\)]*[\+\-\*\/][\s0-9\.\+\-\*\/\(\)]*?)(\s*[,\]])/g;
+                      for (let pass = 0; pass < 5; pass++) {
+                        const next = cleanedJson.replace(mathPattern, (match: string, p1: string, expr: string, p3: string) => {
+                          try {
+                            if (/^[\s0-9\.\+\-\*\/\(\)]+$/.test(expr)) {
+                              // eslint-disable-next-line no-new-func
+                              const val = Function('"use strict"; return (' + expr + ')')();
+                              if (typeof val === 'number' && !isNaN(val) && isFinite(val)) {
+                                return p1 + (Math.round(val * 10000) / 10000) + p3;
+                              }
                             }
-                          }
-                        } catch {}
-                        return match;
-                      });
-                      if (next === cleanedJson) break;
-                      cleanedJson = next;
+                          } catch {}
+                          return match;
+                        });
+                        if (next === cleanedJson) break;
+                        cleanedJson = next;
+                      }
+                      planObj = JSON.parse(cleanedJson);
                     }
-                    const planObj = JSON.parse(cleanedJson);
                     const steps = planObj.steps || planObj.actions || [];
                     if (!Array.isArray(steps) || steps.length === 0) return null;
                     const planKey = `plan_${i}`;

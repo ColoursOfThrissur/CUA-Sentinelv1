@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
-from api.routes import tasks, chat, models, telemetry, hitl, settings, finance, links, notifications, scheduler, digests, gmail_triage, code_refactor, projects, improvements, auth, research, apps, dependency_plans
+from api.routes import tasks, chat, models, telemetry, hitl, settings, finance, links, notifications, scheduler, digests, gmail_triage, code_refactor, projects, improvements, auth, research, apps, dependency_plans, blender
 from api.websocket import router as ws_router
 from config.loader import load_system_config
 from api.auth import SentinelAuthMiddleware
@@ -70,6 +70,7 @@ def create_app(lifespan) -> FastAPI:
     app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
     app.include_router(improvements.router, prefix="/api/improvements", tags=["improvements"])
     app.include_router(apps.router, prefix="/api/apps", tags=["apps"])
+    app.include_router(blender.router, prefix="/api/blender", tags=["blender"])
     app.include_router(dependency_plans.router, prefix="/api/dependency-plans", tags=["dependency_plans"])
     app.include_router(ws_router)
 

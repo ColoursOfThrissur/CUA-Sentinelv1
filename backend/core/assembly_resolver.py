@@ -137,7 +137,11 @@ class AssemblyResolver:
         txn = transaction or SceneTransaction(tool_executor=self.bridge)
         try:
             async with txn:
-                await self._apply_node(graph.root, world_transforms, txn)
+                await self._apply_node(graph.root, world_transforms, txn, graph)
+
+                # Tag all created objects with metadata
+                for obj_info in txn.created_objects:
+                    await txn.tag_object_metadata(obj_info)
 
                 # 3. Mandatory AssemblyVerification across all nodes and edges
                 from core.assembly_verification import AssemblyVerificationGate
@@ -153,6 +157,7 @@ class AssemblyResolver:
                         "error": f"Spatial verification failed: {v_res.get('error')}",
                         "verification": v_res,
                         "rolled_back": True,
+                        "generation_id": txn.generation_id,
                     }
 
                 await txn.commit()
@@ -163,6 +168,7 @@ class AssemblyResolver:
                 "ok": False,
                 "error": f"Assembly execution failed with rollback: {e}",
                 "rolled_back": True,
+                "generation_id": txn.generation_id,
             }
 
         graph.status = "VERIFIED_AND_LOADED"
@@ -172,6 +178,7 @@ class AssemblyResolver:
             "all_joints_verified": True,
             "nodes_placed": len(world_transforms),
             "root_node": graph.root.node_id,
+            "generation_id": txn.generation_id,
         }
 
     def _resolve_node(
@@ -195,9 +202,16 @@ class AssemblyResolver:
         for child in node.children:
             self._resolve_node(child, node_world, world_transforms, errors)
 
-    async def _apply_node(self, node: AssemblyNode, world_transforms: Dict[str, Mat4], txn: Any) -> None:
+    async def _apply_node(self, node: AssemblyNode, world_transforms: Dict[str, Mat4], txn: Any, graph: AssemblyGraph) -> None:
         wt = world_transforms[node.node_id]
         loc, rot_deg = wt.decompose()
+
+        # Determine semantic role for metadata
+        role = "root" if node.attachment.parent_node_id is None else "child"
+        if node.sub_spec.get("primitive") == "cylinder":
+            from core.connector_geometry import is_connector_part
+            if is_connector_part(node.label, node.attachment.socket_name):
+                role = "structural_connector"
 
         # 1. Create geometry for this node first (parent before children)
         if node.sub_spec:
@@ -209,7 +223,7 @@ class AssemblyResolver:
                 args["location"] = list(loc)
                 args["rotation"] = [float(r) for r in rot_deg]
                 await self._call_tool(tool, args)
-                txn.record(node.label)
+                txn.record(node.label, object_id=node.node_id, parent_id=node.attachment.parent_node_id, role=role)
             elif prim == "box":
                 await self._call_tool("blender:create_box", {
                     "name": node.label,
@@ -217,7 +231,7 @@ class AssemblyResolver:
                     "location": list(loc),
                     "rotation": [float(r) for r in rot_deg],
                 })
-                txn.record(node.label)
+                txn.record(node.label, object_id=node.node_id, parent_id=node.attachment.parent_node_id, role=role)
             elif prim == "cylinder":
                 await self._call_tool("blender:create_cylinder", {
                     "name": node.label,
@@ -227,14 +241,14 @@ class AssemblyResolver:
                     "location": list(loc),
                     "rotation": [float(r) for r in rot_deg],
                 })
-                txn.record(node.label)
+                txn.record(node.label, object_id=node.node_id, parent_id=node.attachment.parent_node_id, role=role)
             elif prim == "sphere":
                 await self._call_tool("blender:create_sphere", {
                     "name": node.label,
                     "radius": float(node.sub_spec.get("radius", 1.0)),
                     "location": list(loc),
                 })
-                txn.record(node.label)
+                txn.record(node.label, object_id=node.node_id, parent_id=node.attachment.parent_node_id, role=role)
             else:
                 await self._call_tool("blender:set_transform", {
                     "name": node.label,
@@ -250,7 +264,7 @@ class AssemblyResolver:
 
         # 2. Recurse into children
         for child in node.children:
-            await self._apply_node(child, world_transforms, txn)
+            await self._apply_node(child, world_transforms, txn, graph)
 
             # 3. Parent or fuse child to this node
             if child.attachment.join_mode in (JoinMode.PARENT_ONLY, JoinMode.PARENT_ATTACH):
@@ -264,6 +278,14 @@ class AssemblyResolver:
                     "name": node.label,
                     "target_name": child.label,
                     "operation": "UNION",
+                    "delete_target": True,
+                })
+            elif child.attachment.join_mode == JoinMode.BOOLEAN_DIFFERENCE:
+                # Child cuts into parent (recesses, insets, holes)
+                await self._call_tool("blender:apply_boolean", {
+                    "name": node.label,
+                    "target_name": child.label,
+                    "operation": "DIFFERENCE",
                     "delete_target": True,
                 })
 
