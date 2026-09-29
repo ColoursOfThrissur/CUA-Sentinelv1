@@ -1,4 +1,8 @@
-"""Blender build route — direct path to staged pipeline, bypasses endpoint agent."""
+"""Blender build route — direct path to progressive_v2 pipeline.
+
+This is the ONLY build path. No fallbacks to v4/staged pipeline.
+Uses progressive_v2 for all builds: simple and complex.
+"""
 
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
@@ -9,7 +13,7 @@ router = APIRouter()
 
 class BlenderBuildRequest(BaseModel):
     description: str = Field(..., min_length=3, max_length=2000)
-    use_llm_modifiers: bool = Field(default=False, description="Use LLM for Stage 4.5 modifier intent")
+    use_llm_modifiers: bool = Field(default=True, description="Use LLM for modifier intent")
 
 
 class DimensionVerifyRequest(BaseModel):
@@ -22,12 +26,12 @@ class DimensionVerifyRequest(BaseModel):
 
 @router.post("/build")
 async def build_3d_object(req: BlenderBuildRequest, request: Request):
-    """Build a 3D object in Blender using the staged pipeline.
+    """Build a 3D object in Blender using progressive_v2 pipeline.
     
-    This is the direct entry point - no LLM routing, no endpoint agent.
-    Goes straight to: staged pipeline → Blender MCP execution → verification.
+    This is the ONLY build path:
+    progressive_v2 → recursive decomposition → per-node stages → Blender MCP → verification
     """
-    from core.blender_pipeline.executor import run_staged_pipeline_and_execute
+    from core.blender_pipeline.progressive_v2 import run_progressive_build, HierarchyLimits
     
     # Get managers from app state
     model_manager = getattr(request.app.state, "model_manager", None)
@@ -40,30 +44,38 @@ async def build_3d_object(req: BlenderBuildRequest, request: Request):
     import uuid
     task_id = f"blender_build_{uuid.uuid4().hex[:8]}"
     
-    result = await run_staged_pipeline_and_execute(
-        description=req.description,
-        mcp_manager=mcp_manager,
+    # Run progressive_v2 pipeline
+    result = await run_progressive_build(
+        prompt=req.description,
         model_manager=model_manager,
         task_id=task_id,
-        use_llm_modifiers=req.use_llm_modifiers,
+        mcp_manager=mcp_manager,
+        limits=HierarchyLimits(max_depth=6, max_children=20, max_total_nodes=200),
     )
     
-    if not result.get("ok"):
+    if not result.success:
         return {
             "ok": False,
-            "error": result.get("error"),
+            "error": "; ".join(result.errors) if result.errors else "Build failed",
             "task_id": task_id,
-            "failed_stage": result.get("failed_stage"),
+            "completion_status": result.completion_status.value,
+            "total_nodes": result.total_nodes,
+            "verified_nodes": result.verified_nodes,
+            "failed_nodes": result.failed_nodes,
         }
     
     return {
         "ok": True,
         "task_id": task_id,
-        "status": result.get("status"),
-        "model_name": result.get("model_name"),
-        "parts_count": result.get("parts_count"),
-        "executed_steps": result.get("executed_steps"),
-        "verification": result.get("verification"),
+        "completion_status": result.completion_status.value,
+        "total_nodes": result.total_nodes,
+        "verified_nodes": result.verified_nodes,
+        "failed_nodes": result.failed_nodes,
+        "skipped_nodes": result.skipped_nodes,
+        "blender_objects": result.blender_objects,
+        "build_time_seconds": round(result.build_time_seconds, 2),
+        "llm_calls": result.llm_calls,
+        "blender_ops": result.blender_ops,
     }
 
 

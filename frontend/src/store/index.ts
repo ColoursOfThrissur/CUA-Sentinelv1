@@ -86,5 +86,15 @@ export const useSentinelStore = create<SentinelStore>((set) => ({
   setSystemState: (s) => set({ systemState: s }),
   setWsConnected: (v) => set({ wsConnected: v }),
   addAgentTrace: (trace) =>
-    set((state) => ({ agentTraces: [trace, ...state.agentTraces].slice(0, 50) })),
+    set((state) => {
+      // Deduplicate by step_name + timestamp (within 1 second)
+      const isDupe = state.agentTraces.some(
+        (t) =>
+          t.step_name === trace.step_name &&
+          t.task_id === trace.task_id &&
+          Math.abs(new Date(t.timestamp).getTime() - new Date(trace.timestamp).getTime()) < 1000
+      )
+      if (isDupe) return state
+      return { agentTraces: [trace, ...state.agentTraces].slice(0, 50) }
+    }),
 }))

@@ -34,7 +34,7 @@ try {
         & $python scripts\check_stubs.py
         if ($LASTEXITCODE -ne 0) { throw "Production stub check failed." }
 
-        & $python -m pytest -q backend\tests --disable-warnings --maxfail=1
+        & $python -m pytest backend\tests --disable-warnings --maxfail=5 -v --tb=short --no-header
         if ($LASTEXITCODE -ne 0) { throw "Backend tests failed." }
 
         if (-not $SkipFrontend) {

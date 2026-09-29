@@ -29,6 +29,7 @@ tools_allowed:
   - blender:set_transform
   - blender:get_manifest
   - blender:build_spec
+  - blender:build_progressive
   - blender:save_approved
 view: "finance_summary_view"
 output_schema: null

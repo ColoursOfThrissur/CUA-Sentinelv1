@@ -4,6 +4,19 @@ from pydantic import BaseModel
 from typing import Any
 from db.connections import get_knowledge_db, get_operational_db
 
+BACKGROUND_SERVICES = [
+    {"id": "improvement_scout",   "label": "Code Improvement Scout",     "description": "Scans projects and generates improvement proposals"},
+    {"id": "portfolio_watchdog",  "label": "Portfolio Watchdog",          "description": "Monitors stock prices and triggers alerts"},
+    {"id": "project_health_daemon","label": "Project Health Daemon",     "description": "Auto-audits and repairs registered projects"},
+    {"id": "gmail_triage",        "label": "Gmail Triage & Sync",         "description": "Scans and categorizes inbox emails"},
+    {"id": "discord_bot",         "label": "Discord Bot",                 "description": "2-way Discord remote command integration"},
+    {"id": "scheduler_engine",    "label": "Scheduler Engine",            "description": "Reminders and recurring cron jobs"},
+    {"id": "eval_harness",        "label": "Weekly Eval Harness",         "description": "Runs golden evaluation suite weekly"},
+    {"id": "cache_prune",         "label": "Cache & ChromaDB Pruning",    "description": "Prunes expired result cache and old vector entries"},
+]
+
+SERVICES_PREF_KEY = "background_services_enabled"
+
 router = APIRouter()
 
 
@@ -133,6 +146,55 @@ async def reset_emergency_stop():
         )
         conn.commit()
         return {"emergency_stop": False}
+    finally:
+        conn.close()
+
+
+def _load_services_config(conn) -> dict:
+    row = conn.execute(
+        "SELECT pref_value FROM user_preferences WHERE pref_key = ?", (SERVICES_PREF_KEY,)
+    ).fetchone()
+    if row:
+        try:
+            return json.loads(row["pref_value"])
+        except Exception:
+            pass
+    # Default: all disabled
+    return {s["id"]: False for s in BACKGROUND_SERVICES}
+
+
+@router.get("/background-services")
+async def get_background_services():
+    conn = get_knowledge_db()
+    try:
+        enabled_map = _load_services_config(conn)
+        return [
+            {**s, "enabled": enabled_map.get(s["id"], False)}
+            for s in BACKGROUND_SERVICES
+        ]
+    finally:
+        conn.close()
+
+
+@router.post("/background-services/{service_id}/toggle")
+async def toggle_background_service(service_id: str):
+    from datetime import datetime, timezone
+    if not any(s["id"] == service_id for s in BACKGROUND_SERVICES):
+        raise HTTPException(404, "Unknown service")
+    conn = get_knowledge_db()
+    try:
+        enabled_map = _load_services_config(conn)
+        enabled_map[service_id] = not enabled_map.get(service_id, False)
+        conn.execute(
+            """
+            INSERT INTO user_preferences (pref_key, pref_value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(pref_key) DO UPDATE SET pref_value = excluded.pref_value, updated_at = excluded.updated_at
+            """,
+            (SERVICES_PREF_KEY, json.dumps(enabled_map), datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        return {"service_id": service_id, "enabled": enabled_map[service_id]}
     finally:
         conn.close()
 

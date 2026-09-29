@@ -916,45 +916,98 @@ class EndpointAgent(BaseAgent):
             )
             if _is_primitive_plan:
                 try:
-                    from core.blender_pipeline.executor import run_staged_pipeline_and_execute
+                    from core.blender_pipeline.progressive_v2 import run_progressive_build, HierarchyLimits
                     mcp_mgr = getattr(self, "_mcp_manager", None)
-                    logger.info(f"[task={task_id}] Re-routing primitive plan through staged pipeline")
-                    _staged_result = await run_staged_pipeline_and_execute(
-                        description=prompt,
-                        mcp_manager=mcp_mgr,
+                    logger.info(f"[task={task_id}] Re-routing primitive plan through progressive_v2 pipeline")
+                    _staged_result = await run_progressive_build(
+                        prompt=prompt,
                         model_manager=self.model_manager,
                         task_id=task_id,
+                        mcp_manager=mcp_mgr,
+                        limits=HierarchyLimits(max_depth=6, max_children=20, max_total_nodes=200),
                     )
-                    if _staged_result.get("ok"):
-                        # Staged pipeline executed successfully - clear steps_to_execute
-                        # so we don't double-execute, and record the result
-                        executed_tool_results.append(("blender:build_spec", {"data": _staged_result}))
-                        executed_summaries.append(
-                            f"✅ `blender:build_spec`: Built {_staged_result.get('parts_count', '?')} parts, "
-                            f"status={_staged_result.get('status', 'OK')}"
+                    if _staged_result.success:
+                        _prim_result_entry = ("blender:build_spec", {"data": {
+                            "ok": True,
+                            "status": _staged_result.completion_status.value,
+                            "total_nodes": _staged_result.total_nodes,
+                            "verified_nodes": _staged_result.verified_nodes,
+                        }})
+                        _prim_summary = (
+                            f"✅ `blender:build_spec`: Built {_staged_result.verified_nodes} parts, "
+                            f"status={_staged_result.completion_status.value}"
                         )
-                        steps_to_execute = []  # Clear - already executed via staged pipeline
+                        steps_to_execute = []  # Clear - already executed via pipeline
+                        # Initialize lists now so the post-execution block can use them
+                        executed_tool_results = [_prim_result_entry]
+                        executed_summaries = [_prim_summary]
                         logger.info(
-                            f"[task={task_id}] Staged pipeline succeeded: "
-                            f"{_staged_result.get('executed_steps')} steps executed"
+                            f"[task={task_id}] Progressive pipeline succeeded: "
+                            f"{_staged_result.verified_nodes} nodes verified"
                         )
                     else:
                         logger.warning(
-                            f"[task={task_id}] Staged pipeline failed: {_staged_result.get('error')}, "
+                            f"[task={task_id}] Progressive pipeline failed: {_staged_result.errors}, "
                             f"falling back to direct primitive execution"
                         )
                         # Fall through to execute primitives directly
                 except Exception as _sp_err:
                     logger.warning(
-                        f"[task={task_id}] Staged pipeline error ({_sp_err}), "
+                        f"[task={task_id}] Progressive pipeline error ({_sp_err}), "
                         f"falling back to direct primitive execution"
                     )
 
             # Execute extracted steps
             if steps_to_execute:
+                # CRITICAL: If plan contains ANY build_spec or blender primitives, 
+                # route the ENTIRE original prompt through ONE progressive build.
+                # The pipeline handles decomposition internally - we should NOT execute
+                # multiple build_spec calls or mix build_spec with primitives/booleans.
+                has_build_spec = any(t == "blender:build_spec" for t, _ in steps_to_execute)
+                has_blender_ops = any(t.startswith("blender:") and t not in ("blender:get_manifest", "blender:create_light", "blender:create_camera") for t, _ in steps_to_execute)
+                
+                if has_build_spec or (has_blender_ops and len(steps_to_execute) > 2):
+                    # Route through single progressive build with original prompt
+                    logger.info(f"[task={task_id}] Routing multi-step Blender plan through single progressive build")
+                    try:
+                        from core.blender_pipeline.progressive_v2 import run_progressive_build, HierarchyLimits
+                        mcp_mgr = getattr(self, "_mcp_manager", None)
+                        
+                        _prog_result = await run_progressive_build(
+                            prompt=prompt,
+                            model_manager=self.model_manager,
+                            task_id=task_id,
+                            mcp_manager=mcp_mgr,
+                            limits=HierarchyLimits(max_depth=3, max_children=10, max_total_nodes=30),
+                        )
+                        
+                        # Build result and skip the original steps
+                        executed_tool_results = [("blender:build_spec", {"data": _prog_result.to_dict()})]
+                        if _prog_result.success:
+                            executed_summaries = [
+                                f"✅ `blender:build_spec`: Built {_prog_result.verified_nodes}/{_prog_result.total_nodes} parts, "
+                                f"status={_prog_result.completion_status.value}"
+                            ]
+                        else:
+                            executed_summaries = [
+                                f"⚠️ `blender:build_spec`: {_prog_result.completion_status.value} - {', '.join(_prog_result.errors[:2])}"
+                            ]
+                        
+                        # Skip to post-execution (don't run the LLM's individual steps)
+                        steps_to_execute = []  
+                        logger.info(f"[task={task_id}] Progressive build complete: {_prog_result.verified_nodes} nodes verified")
+                        
+                    except Exception as _pb_err:
+                        logger.error(f"[task={task_id}] Progressive build failed: {_pb_err}")
+                        executed_summaries = [f"❌ Progressive build error: {_pb_err}"]
+                        executed_tool_results = []
+                        steps_to_execute = []  # Don't fall back to broken multi-step
+
                 allowed_tools = set(self.profile.get("tools_allowed", [])) if self.profile else set()
-                executed_summaries = []
-                executed_tool_results = []
+                if not executed_summaries:
+                    executed_summaries = []
+                if not executed_tool_results:
+                    executed_tool_results = []
                 total_steps = len(steps_to_execute)
                 for step_idx, (tool_to_call, call_args) in enumerate(steps_to_execute, start=1):
                     import uuid as _uuid
@@ -1158,8 +1211,14 @@ class EndpointAgent(BaseAgent):
                     except Exception as disc_err:
                         logger.warning(f"Tool search follow-up turn error: {disc_err}")
 
-                # Grounded Observation Synthesis (Claude Code QueryEngine pattern)
-                # Feed real observations back into LLM so it reflects actual tool outcomes
+            # Grounded Observation Synthesis (Claude Code QueryEngine pattern)
+            # Feed real observations back into LLM so it reflects actual tool outcomes
+            # Runs whether steps_to_execute was populated or cleared by _is_primitive_plan.
+            _etl = locals().get("executed_tool_results") or []
+            _es = locals().get("executed_summaries") or []
+            if _etl:
+                executed_tool_results = _etl
+                executed_summaries = _es
                 _blender_primitive_tools = {
                     "blender:create_cylinder", "blender:create_box", "blender:create_sphere",
                     "blender:create_cone", "blender:create_torus", "blender:apply_boolean",
@@ -1193,13 +1252,52 @@ class EndpointAgent(BaseAgent):
                         isinstance(r.get("data"), dict) and "build_id" in r["data"]
                         for _, r in executed_tool_results
                     )
+                    
+                    # Check verification status from build results
+                    _verification_passed = True
+                    _spatial_errors = []
+                    _completion_status = "SUCCESS"
+                    for _, r in executed_tool_results:
+                        d = r.get("data") or {}
+                        if d.get("spatial_verification_failed"):
+                            _verification_passed = False
+                            _spatial_errors = d.get("spatial_errors", [])
+                        if d.get("completion_status"):
+                            _completion_status = d["completion_status"]
+                        # Also check errors list
+                        if d.get("errors"):
+                            for err in d["errors"]:
+                                if "interpenetration" in err.lower() or "floating" in err.lower() or "embedment" in err.lower():
+                                    _verification_passed = False
+                                    _spatial_errors.append(err)
+                    
                     if _is_build_spec:
-                        _synth_instructions = (
-                            "Write a clear, confident response confirming the 3D model was built and loaded. "
-                            "Mention the model name, polygon count, and quality verification status. "
-                            "End your response with exactly one line in this format: 'build_id: <the_actual_build_id_value>'. "
-                            "Do NOT output raw JSON blocks. Do NOT write 'save as approved' in your response."
-                        )
+                        # CRITICAL: Synthesis prompt MUST branch on verification outcome
+                        # Do NOT always say "confident" - that's the BUILT_WITH_WARNINGS bug
+                        if _verification_passed and _completion_status == "SUCCESS":
+                            _synth_instructions = (
+                                "Write a clear, confident response confirming the 3D model was built and loaded successfully. "
+                                "Mention the model name, polygon count, and that verification passed. "
+                                "End your response with exactly one line in this format: 'build_id: <the_actual_build_id_value>'. "
+                                "Do NOT output raw JSON blocks. Do NOT write 'save as approved' in your response."
+                            )
+                        elif _completion_status == "COMPLETED_DEGRADED" or _spatial_errors:
+                            _spatial_warning = "; ".join(_spatial_errors[:3]) if _spatial_errors else "spatial verification issues detected"
+                            _synth_instructions = (
+                                f"Write a response indicating the 3D model was built but has SPATIAL ISSUES that need attention. "
+                                f"The following problems were detected: {_spatial_warning}. "
+                                f"Mention the model name and polygon count, but clearly warn the user about the geometry problems. "
+                                f"Use a cautious tone, NOT a confident one. Suggest the user inspect the model in Blender. "
+                                f"End your response with exactly one line in this format: 'build_id: <the_actual_build_id_value>'. "
+                                f"Do NOT output raw JSON blocks."
+                            )
+                        else:
+                            _synth_instructions = (
+                                "Write a response indicating the 3D model build completed with warnings or partial success. "
+                                "Mention what was built and any issues encountered. Use a measured tone. "
+                                "End your response with exactly one line in this format: 'build_id: <the_actual_build_id_value>'. "
+                                "Do NOT output raw JSON blocks."
+                            )
                     else:
                         _synth_instructions = (
                             "Write a clear, confident response summarising what was built in Blender. "

@@ -1,6 +1,6 @@
-"""Blender Assembly Pipeline — Staged Architecture per BLENDER_PIPELINE_BLUEPRINT.md.
+"""Blender Assembly Pipeline — Progressive v2 Architecture.
 
-This module implements the 5-stage pipeline where:
+This module implements the progressive assembly pipeline where:
 - Stages 0-3: LLM makes semantic/creative judgments (no raw numbers)
 - Stage 4: Pure code computes all numeric transforms
 - Stage 5: Targeted feedback on verification failure
@@ -8,31 +8,13 @@ This module implements the 5-stage pipeline where:
 The key invariant: NO numeric offset or rotation value that reaches Blender
 may come directly from the LLM. Every axis is either computed by code or
 derived from a closed-vocabulary semantic hint.
+
+All builds now route through progressive_v2.
 """
 
-from .stage0_understanding import Stage0Understanding, ObjectUnderstanding
-from .stage1_topology import Stage1Topology, PartTopology
-from .stage2_dimensions import Stage2Dimensions, DimensionedPart
-from .stage3_semantics import Stage3Semantics, AttachmentSemantics
-from .stage4_resolver import Stage4Resolver, ShapeBounds
-from .orchestrator import StagedPipelineOrchestrator
-from .executor import run_staged_pipeline_and_execute, execute_assembly_graph
-from .primitive_readback import run_primitive_readback, verify_built_object_dimensions
+from .progressive_v2 import run_progressive_build, HierarchyLimits
 
 __all__ = [
-    "Stage0Understanding",
-    "ObjectUnderstanding",
-    "Stage1Topology",
-    "PartTopology",
-    "Stage2Dimensions",
-    "DimensionedPart",
-    "Stage3Semantics",
-    "AttachmentSemantics",
-    "Stage4Resolver",
-    "ShapeBounds",
-    "StagedPipelineOrchestrator",
-    "run_staged_pipeline_and_execute",
-    "execute_assembly_graph",
-    "run_primitive_readback",
-    "verify_built_object_dimensions",
+    "run_progressive_build",
+    "HierarchyLimits",
 ]

@@ -158,8 +158,9 @@ class ToolGateway:
         for tool_name, (param_cls, template) in ops_map.items():
             cls._TOOL_HANDLERS[tool_name] = _make_handler(param_cls, template)
 
-        async def _build_spec_handler(**kwargs):
-            from core.blender_pipeline.executor import run_staged_pipeline_and_execute
+        async def _build_progressive_handler(**kwargs):
+            """v5 Progressive Pipeline (progressive_v2) - the ONLY build path."""
+            from core.blender_pipeline.progressive_v2 import run_progressive_build, HierarchyLimits
             from core.model_manager import ModelManager
             
             mcp_mgr = cls._active_mcp_manager or MCPManager.get_instance() or MCPManager()
@@ -174,17 +175,30 @@ class ToolGateway:
                 cls._active_model_manager = mdl_mgr
             
             description = kwargs.get("description") or kwargs.get("params", {}).get("name", "")
-            task_id = kwargs.get("task_id", "build_spec")
-            # Optional: use LLM for Stage 4.5 modifier intent (default: inference)
-            use_llm_modifiers = kwargs.get("use_llm_modifiers", False)
+            task_id = kwargs.get("task_id", "progressive_build")
             
-            return await run_staged_pipeline_and_execute(
-                description=description,
-                mcp_manager=mcp_mgr,
+            res = await run_progressive_build(
+                prompt=description,
                 model_manager=mdl_mgr,
                 task_id=task_id,
-                use_llm_modifiers=use_llm_modifiers,
+                mcp_manager=mcp_mgr,
+                limits=HierarchyLimits(max_depth=3, max_children=10, max_total_nodes=30),
             )
+            return {
+                "ok": res.success,
+                "status": res.completion_status.value,
+                "total_nodes": res.total_nodes,
+                "verified_nodes": res.verified_nodes,
+                "failed_nodes": res.failed_nodes,
+                "skipped_nodes": res.skipped_nodes,
+                "blender_objects": res.blender_objects,
+                "build_time_seconds": round(res.build_time_seconds, 2),
+                "errors": res.errors,
+            }
+
+        async def _build_spec_handler(**kwargs):
+            """v5 Progressive Pipeline is now the default and only pipeline."""
+            return await _build_progressive_handler(**kwargs)
 
         async def _save_approved_handler(**kwargs):
             from core.spec3d.pipeline import Spec3DPipeline
@@ -209,6 +223,7 @@ class ToolGateway:
             return idx.search(query=query, limit=limit, max_tokens=max_tokens)
 
         cls._TOOL_HANDLERS["blender:build_spec"] = _build_spec_handler
+        cls._TOOL_HANDLERS["blender:build_progressive"] = _build_progressive_handler
         cls._TOOL_HANDLERS["blender:save_approved"] = _save_approved_handler
         cls._TOOL_HANDLERS["search_tools"] = _search_tools_handler
 

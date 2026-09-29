@@ -75,6 +75,15 @@ export const settingsApi = {
   setSafeMode: (enable: boolean) => api.post('/settings/system/safe-mode', { enable }),
   emergencyStop: () => api.post('/settings/system/emergency-stop'),
   resetEmergencyStop: () => api.post('/settings/system/emergency-stop/reset'),
+  getBackgroundServices: () => api.get<BackgroundService[]>('/settings/background-services'),
+  toggleBackgroundService: (id: string) => api.post<{ service_id: string; enabled: boolean }>(`/settings/background-services/${id}/toggle`),
+}
+
+export interface BackgroundService {
+  id: string
+  label: string
+  description: string
+  enabled: boolean
 }
 
 export interface ImprovementProposal {

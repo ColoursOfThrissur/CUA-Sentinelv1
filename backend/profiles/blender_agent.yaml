@@ -22,6 +22,7 @@ tools_allowed:
   - "blender:set_transform"
   - "blender:get_manifest"
   - "blender:build_spec"
+  - "blender:build_progressive"
 view: null
 output_schema: null
 validators: []

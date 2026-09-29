@@ -667,6 +667,23 @@
         "endpoint_agent"
       ]
     },
+    "blender:build_progressive": {
+      "name": "blender:build_progressive",
+      "side_effect": "act",
+      "risk_level": "L2",
+      "returns_untrusted": false,
+      "reads_private_data": false,
+      "deny_all": false,
+      "taint_deny": false,
+      "taint_safe": true,
+      "egress": false,
+      "timeout_seconds": 120,
+      "cost": 5,
+      "allowed_agents": [
+        "blender_agent",
+        "endpoint_agent"
+      ]
+    },
     "blender:save_approved": {
       "name": "blender:save_approved",
       "side_effect": "write",

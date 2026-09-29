@@ -171,6 +171,25 @@ async def _eval_harness_loop() -> None:
 
         await asyncio.sleep(EVAL_INTERVAL_SEC)
 
+def _is_service_enabled(service_id: str) -> bool:
+    """Check user preference for a background service. Default: disabled."""
+    try:
+        from db.connections import get_knowledge_db
+        conn = get_knowledge_db()
+        try:
+            row = conn.execute(
+                "SELECT pref_value FROM user_preferences WHERE pref_key = 'background_services_enabled'"
+            ).fetchone()
+            if row:
+                cfg = __import__("json").loads(row["pref_value"])
+                return bool(cfg.get(service_id, False))
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return False
+
+
 async def startup(app: FastAPI) -> None:
     logger.info(f"CUA-Sentinel starting. Boot ID: {BOOT_ID}")
 
@@ -273,24 +292,33 @@ async def startup(app: FastAPI) -> None:
 
     # Initialize Discord 2-Way Bot Service if configured
     discord_bot = DiscordSentinelBot(task_queue=task_queue, governance=governance)
-    try:
-        from core.alert_manager import AlertManager
-        am = AlertManager()
-        token = am._get_setting("discord_bot_token")
-        allowed_uid = am._get_setting("discord_allowed_user_id")
-        channel_id = am._get_setting("discord_channel_id")
-        if token:
-            discord_bot.start_bot(token, allowed_uid, channel_id)
-    except Exception as d_err:
-        logger.warning(f"Could not initialize Discord Bot: {d_err}")
+    if _is_service_enabled("discord_bot"):
+        try:
+            from core.alert_manager import AlertManager
+            am = AlertManager()
+            token = am._get_setting("discord_bot_token")
+            allowed_uid = am._get_setting("discord_allowed_user_id")
+            channel_id = am._get_setting("discord_channel_id")
+            if token:
+                discord_bot.start_bot(token, allowed_uid, channel_id)
+        except Exception as d_err:
+            logger.warning(f"Could not initialize Discord Bot: {d_err}")
+    else:
+        logger.info("Background service 'discord_bot' is disabled — skipping.")
 
     # Initialize SchedulerEngine for background reminders & cron jobs
     scheduler_engine = SchedulerEngine(task_queue=task_queue, discord_bot=discord_bot)
-    await scheduler_engine.start()
+    if _is_service_enabled("scheduler_engine"):
+        await scheduler_engine.start()
+    else:
+        logger.info("Background service 'scheduler_engine' is disabled — skipping.")
 
     from core.portfolio_watchdog import PortfolioWatchdog
     portfolio_watchdog = PortfolioWatchdog()
-    portfolio_watchdog.start_background_loop()
+    if _is_service_enabled("portfolio_watchdog"):
+        portfolio_watchdog.start_background_loop()
+    else:
+        logger.info("Background service 'portfolio_watchdog' is disabled — skipping.")
 
     app.state.config = config
     app.state.policy = policy

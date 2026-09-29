@@ -1,1735 +1,631 @@
-# Blender Assembly Pipeline — Architecture Blueprint v5
+# v5 Progressive Assembly Pipeline — Implementation Plan
 
-**Status:** ARCHITECTURE PROPOSED — replaces v4 execution model
-**Audience:** An implementing coding assistant with no memory of prior discussion
-**Purpose:** Define a progressive, hierarchical, failure-recoverable Blender assembly pipeline for complex models.
-
----
-
-# 0. Core Philosophy
-
-The pipeline must behave like a **smart jigsaw-puzzle solver**.
-
-It must NOT attempt to generate an entire complex model in one pass.
-
-Instead:
-
-> **Understand the whole model → recursively decompose only where useful → build the smallest independently reliable units → verify and lock them → progressively merge verified units upward → repeat until the root model is complete.**
-
-The system must maintain persistent execution state throughout the build.
-
-The LLM provides semantic/creative decisions.
-
-Code owns:
-
-* hierarchy integrity
-* dependency resolution
-* numeric geometry
-* transforms
-* socket calculations
-* build scheduling
-* state transitions
-* cleanup
-* retries
-* verification gates
-* rollback
-* assembly merging
-
-The existing numeric-geometry invariant from v4 remains mandatory.
+**Status:** COMPLETE — All 5 phases implemented and tested (28/28 tests passing)  
+**Date:** 2025-01-XX  
+**Blueprint Source:** [`docs/BLENDER_Pipeline_newBP.md`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/docs/BLENDER_Pipeline_newBP.md) (1736 lines, 45 sections)
 
 ---
 
-# 1. Core Invariant
+## 1. What v4 Actually Is (Two Parallel Systems)
 
-> **No numeric offset or rotation value that reaches Blender may come directly from the LLM.**
+Before planning v5, it's critical to understand that v4 is actually **two separate pipeline systems** that coexist:
 
-Every axis of every transform is either:
+### System A: `backend/core/spec3d/` — Declarative Spec Pipeline (449+767+370+271+630+465+259 = ~3200 lines)
 
-1. computed deterministically from known geometry, or
-2. derived from a closed-vocabulary semantic hint selected by the LLM.
+| File | Lines | Role |
+|------|-------|------|
+| [`schema.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/spec3d/schema.py) | 213 | `QuadrupedSpec`, `HardSurfaceSpec`, `VesselSpec` Pydantic schemas |
+| [`pipeline.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/spec3d/pipeline.py) | 449 | `Spec3DPipeline.process_build_spec()` — routes, verify, compile, run |
+| [`compiler.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/spec3d/compiler.py) | 767 | Generates standalone `.py` scripts for `blender -b` |
+| [`verifier.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/spec3d/verifier.py) | 370 | Tier 1 (in-memory) + Tier 2 (mesh metrics) verification |
+| [`runner.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/spec3d/runner.py) | 271 | `HeadlessBlenderRunner` — subprocess `blender -b` |
+| [`planner.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/spec3d/planner.py) | 630 | LLM best-of-N planning, repair, scoring |
+| [`templates.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/spec3d/templates.py) | 465 | 9 golden archetype templates |
+| [`library.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/spec3d/library.py) | 259 | Filesystem-based approved spec store |
 
-There is no path where:
+**Execution model:** `Prompt → (Library|LLM|Template) → Spec → Compile to .py → blender -b → .blend → MCP append`
 
-```text
-LLM raw number
-    ↓
-Blender transform
-```
+### System B: `backend/core/blender_pipeline/` — Staged Assembly Pipeline (~3400+ lines)
 
-is allowed.
+| File | Lines | Role |
+|------|-------|------|
+| [`orchestrator.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/blender_pipeline/orchestrator.py) | 401 | `StagedPipelineOrchestrator.run()` — Stages 0→4 |
+| [`executor.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/blender_pipeline/executor.py) | 1152 | Stages 4.5→6 — Blender execution + verification |
+| [`stage0_understanding.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/blender_pipeline/stage0_understanding.py) | ~250 | Category, scale, style tag |
+| [`stage1_topology.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/blender_pipeline/stage1_topology.py) | ~350 | Part tree (no numbers) |
+| [`stage2_dimensions.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/blender_pipeline/stage2_dimensions.py) | ~300 | Meters per part |
+| [`stage3_semantics.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/blender_pipeline/stage3_semantics.py) | ~250 | Attachment hints |
+| [`stage4_resolver.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/blender_pipeline/stage4_resolver.py) | 1489 | Pure-code transform resolution |
+| [`stage45_modifiers.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/blender_pipeline/stage45_modifiers.py) | ~150 | Bevel/subsurf intent |
 
-This invariant applies recursively to every assembly and every build level.
+**Execution model:** `Prompt → Stage 0 (LLM) → Stage 1 (LLM) → Stage 2 (LLM) → Stage 3 (LLM) → Stage 4 (code) → AssemblyGraph → graph_to_blender_steps() → MCP execute → Verify`
 
----
+### Shared Infrastructure (used by both)
 
-# 2. New Architectural Model
-
-The previous architecture treated the complete model as a flat part graph.
-
-v5 introduces three distinct structural concepts.
-
-## 2.1 Containment Hierarchy
-
-Defines:
-
-> What belongs inside what?
-
-```text
-MODEL
-└── ASSEMBLY
-    ├── ASSEMBLY
-    │   ├── PART
-    │   └── PART
-    ├── PART
-    └── ASSEMBLY
-        └── PART
-```
-
-Example:
-
-```text
-pirate_ship
-├── hull_assembly
-│   ├── hull_body
-│   └── keel
-├── deck_assembly
-│   ├── main_deck
-│   └── railing_assembly
-│       ├── railing_post
-│       └── railing_bar
-├── mast_assembly
-│   ├── mast_pole
-│   └── sail_assembly
-│       ├── sail
-│       └── boom
-└── armament_assembly
-    └── cannon_assembly
-        ├── barrel
-        ├── base
-        └── wheels
-```
+| File | Lines | Role |
+|------|-------|------|
+| [`assembly_spec.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/assembly_spec.py) | 668 | `AssemblyGraph`, `AssemblyNode`, `graph_to_blender_steps()` |
+| [`assembly_resolver.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/assembly_resolver.py) | 306 | Top-down transform resolution + Blender execution |
+| [`assembly_verification.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/assembly_verification.py) | 493 | BVH/spatial verification gate |
+| [`assembly_feedback.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/assembly_feedback.py) | 148 | Deterministic mutation + diagnostic prompts |
+| [`scene_transaction.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/scene_transaction.py) | 212 | Generation-scoped atomic rollback |
+| [`blender_ops.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/blender_ops.py) | 1624 | 22 Pydantic models + Blender script templates |
 
 ---
 
-## 2.2 Dependency DAG
+## 2. What v5 Changes (Gap Analysis: Blueprint vs Current Code)
 
-Defines:
+### Already implemented in v4 ✅
 
-> What must be available before this node can be built, merged, or verified?
+| Blueprint Requirement | v4 Status | Location |
+|----------------------|-----------|----------|
+| Core Invariant: no LLM raw numbers | ✅ Enforced | `stage4_resolver.py` — pure code |
+| Stage 0 Object Understanding | ✅ | `stage0_understanding.py` |
+| Stage 1–3 LLM stages | ✅ | `stage1_topology.py`, `stage2_dimensions.py`, `stage3_semantics.py` |
+| Stage 4 Deterministic Resolution | ✅ (1489 lines) | `stage4_resolver.py` |
+| Stage 4.5 Modifiers | ✅ | `stage45_modifiers.py` |
+| Blender execution via MCP | ✅ | `executor.py` + `blender_ops.py` |
+| Generation-scoped collections | ✅ | `scene_transaction.py` |
+| Transactional rollback | ✅ | `scene_transaction.py` |
+| No `clear_scene` | ✅ | Enforced throughout |
+| BVH spatial verification | ✅ | `assembly_verification.py` |
+| Euler rotation composition via matrices | ✅ | `assembly_spec.py` + `assembly_resolver.py` |
+| Socket type vocabulary (17 types) | ✅ | `stage4_resolver.py` |
+| Retry with stage-targeted feedback | ✅ (bounded) | `orchestrator.py` `_run_with_retry()` |
+| Boolean difference support | ✅ | `JoinMode.BOOLEAN_DIFFERENCE` |
+| WebSocket trace broadcast | ✅ | `broadcast.py` |
 
-Example:
+### New in v5 — Must Build 🔨
 
-```text
-wheel_definition
-       ↓
-cannon_assembly
-       ↓
-armament_assembly
-       ↓
-ship
-```
-
-The dependency graph must be cycle-free.
-
-Build order is determined from the dependency graph, not from arbitrary numeric depth.
-
----
-
-## 2.3 Relationship Graph
-
-Defines relationships that cross containment boundaries.
-
-Example:
-
-```text
-mast.rigging_anchor
-          │
-          │ rope connection
-          ▼
-railing.rigging_anchor
-```
-
-A connection does not require the rope or connector to belong simultaneously to both assemblies.
-
-Relationship records reference sockets/interfaces.
-
----
-
-# 3. Hierarchy Levels
-
-Every generated object belongs to one of these conceptual levels:
-
-```text
-MODEL
-  ↓
-ASSEMBLY
-  ↓
-SUB-ASSEMBLY
-  ↓
-PART
-```
-
-There is no requirement that every branch reaches the same depth.
-
-Example:
-
-```text
-ROBOT
-├── body_assembly
-│   ├── torso          ← leaf
-│   └── chest_panel    ← leaf
-│
-├── arm_assembly
-│   ├── upper_arm      ← leaf
-│   └── hand_assembly
-│       ├── palm       ← leaf
-│       └── finger     ← leaf
-```
-
-The hierarchy is therefore **variable-depth**.
+| Blueprint Requirement | Sections | Complexity | What Exists to Build On |
+|----------------------|----------|------------|------------------------|
+| **Containment Hierarchy** (variable-depth tree) | §2.1, §3, §4 | HIGH | `AssemblyNode.children` exists but flat in practice |
+| **Dependency DAG** (separate from hierarchy) | §2.2, §34 | MEDIUM | None — currently implicit in parent order |
+| **Relationship Graph** (cross-assembly sockets) | §2.3, §35 | MEDIUM | None — currently all sockets are parent-child |
+| **Recursive Decomposer** (smart stop conditions) | §4, §5 | HIGH | None — currently single-pass LLM topology |
+| **Persistent Build Manifest** (JSON checkpoint) | §6, §7, §19 | MEDIUM | `_pending_builds` in pipeline.py (minimal) |
+| **Node State Machine** (10 states) | §8 | LOW | `AssemblyNode.status` exists (5 states) |
+| **Build Frontier** | §9 | MEDIUM | None — currently sequential |
+| **Smart Scheduler** | §10 | MEDIUM | None |
+| **Bottom-Up Progressive Assembly** | §11, §31 | HIGH | Currently top-down in one pass |
+| **Assembly Merge Operation** | §12 | HIGH | `JoinMode.FUSE` exists but no merge-then-verify loop |
+| **Assembly Contract (interfaces/sockets)** | §13 | MEDIUM | `AttachmentSpec` exists but lacks public interface concept |
+| **Instance Definitions** (definition vs placement) | §14 | MEDIUM | None — currently each copy is independent |
+| **Surgical Failure Handling** (local → assembly → skip) | §15 | MEDIUM | `AssemblyFeedbackEngine` exists (partial) |
+| **Required vs Optional components** | §16, §17 | LOW | None |
+| **Degraded Completion** (SUCCESS_DEGRADED) | §17 | LOW | None — currently binary pass/fail |
+| **Cleanup Before Retry** | §18 | LOW | `scene_transaction.py` rollback exists |
+| **Checkpointing** (at verification boundaries) | §19 | MEDIUM | None |
+| **Dirty Propagation** (STALE cascade) | §20 | MEDIUM | None |
+| **Progressive Verification** (per-level) | §21 | MEDIUM | `AssemblyVerificationGate` exists (single-level) |
+| **Retry Routing** (failure → specific stage) | §30 | LOW | `orchestrator.run_from_stage()` exists |
 
 ---
 
-# 4. Progressive Decomposition
+## 3. Open Design Decisions
 
-## 4.1 Principle
+> [!IMPORTANT]
+> These 6 questions need YOUR input before implementation begins. Each has a recommended default.
 
-The system recursively decomposes a node only when further decomposition provides meaningful benefits.
+### Q1: Persistence Location
+**Options:**
+- **(Recommended) JSON files** in `data/builds/{model_id}/manifest.json` — human-readable, git-friendly, matches existing `data/specs/` pattern
+- SQLite in `operational.sqlite` — already used for `_pending_builds`, but harder to inspect/debug
 
-It must NOT blindly decompose until a fixed depth.
+### Q2: Checkpoint Granularity
+**Options:**
+- **(Recommended) Every verified node + every successful merge** — matches blueprint §19 exactly
+- Only at assembly boundaries — faster but less crash-resilient
 
-For each node:
+### Q3: Instance Implementation
+**Options:**
+- **(Recommended) Full mesh copies** initially, with Blender `linked duplicates` as a Phase 3+ optimization — simpler, more debuggable
+- Linked duplicates from day 1 — more memory efficient but harder to verify individually
 
-```text
-Node
- ↓
-Can this node be reliably built and verified as one unit?
- ├── YES → LEAF
- └── NO  → DECOMPOSE
-```
+### Q4: Decomposition LLM Call Placement
+**Options:**
+- **(Recommended) New Stage 0.5** between Understanding and Topology — clean separation, dedicated prompt
+- Extend Stage 0 output — faster (one LLM call) but overloads a single prompt
 
----
+### Q5: Parallel Building
+**Options:**
+- **(Recommended) Single-threaded first** — v5 Phase 1 builds one node at a time; data structures support concurrency but don't require it
+- Design for concurrency from day 1 — much more complex transaction/rollback logic
 
-# 4.2 Decomposition Stop Conditions
-
-A node may become a leaf when all or most of the following are satisfied:
-
-### A. Geometric manageability
-
-The geometry can be generated reliably within the current pipeline capabilities.
-
-### B. Semantic cohesion
-
-The components represent one meaningful object.
-
-### C. Independent verification
-
-The node can be verified without requiring the complete parent model.
-
-### D. Clear interface
-
-The node exposes sufficient sockets/mount points for its parent.
-
-### E. Further decomposition has low value
-
-Splitting the node further would not materially improve:
-
-* generation reliability
-* verification
-* repairability
-* reuse
-* scheduling
-
-### F. Complexity budget is satisfied
-
-The node is below configured limits.
+### Q6: Migration Path
+**Options:**
+- **(Recommended) Keep v4 (System B) as fallback** behind a feature flag; v5 is a new class `ProgressiveAssemblyController` that can be selected per-request
+- Full replacement — risky, breaks existing 96 tests before v5 is proven
 
 ---
 
-# 4.3 Hard Safety Limits
+## 4. Phased Implementation Plan
 
-The system must still enforce:
+### Phase 1: Foundation (State + Hierarchy) — ~1200 new lines
 
-```text
-MAX_HIERARCHY_DEPTH
-MAX_CHILDREN_PER_NODE
-MAX_PARTS_PER_ASSEMBLY
-MAX_TOTAL_NODES
-MAX_DECOMPOSITION_ATTEMPTS
-```
-
-These are safety limits, NOT the primary decomposition strategy.
-
----
-
-# 5. Recursive Decomposition Algorithm
-
-Conceptually:
-
-```text
-decompose(node):
-
-    evaluate node complexity
-
-    if node is buildable:
-        mark node LEAF
-        return
-
-    if safety limits exceeded:
-        mark node LEAF_WITH_WARNING
-        return
-
-    request semantic decomposition
-
-    validate proposed children
-
-    recursively evaluate each child
-
-    return hierarchy
-```
-
-The LLM proposes semantic structure.
-
-Code validates the structure.
-
-The LLM must not control hierarchy integrity.
-
----
-
-# 6. Persistent Model Manifest
-
-The entire build must have a persistent temporary execution manifest.
-
-This is the pipeline's working state.
-
-Conceptually:
-
-```text
-build_manifest.json
-```
-
-contains:
-
-```text
-MODEL
-├── model_id
-├── description
-├── version
-└── root_node
-
-HIERARCHY
-├── nodes
-├── parent relationships
-└── instances
-
-DEPENDENCIES
-├── dependency edges
-└── build ordering information
-
-RELATIONSHIPS
-├── socket connections
-└── cross-assembly references
-
-BUILD_STATE
-├── current_node
-├── queue
-├── frontier
-├── completed
-├── failed
-├── skipped
-└── active
-
-VERIFICATION
-├── results
-├── failures
-└── affected nodes
-
-RETRY
-├── attempt count
-├── failure reason
-└── retry stage
-
-CHECKPOINTS
-└── last committed state
-```
-
-The exact schema is implementation-defined.
-
-The architectural requirement is that the state must be sufficient to resume the build after interruption.
-
----
-
-# 7. Temporary vs Permanent State
-
-The execution manifest is temporary.
-
-During successful completion:
-
-```text
-temporary build state
-        ↓
-final model committed
-        ↓
-temporary execution state deleted
-```
-
-Permanent model information must remain in the final model/manifest as appropriate.
-
-Do NOT delete the actual model hierarchy merely because the temporary build manifest is removed.
-
----
-
-# 8. Node State Machine
-
-Every node must have an explicit state.
-
-Minimum states:
-
-```text
-PLANNED
-DECOMPOSING
-READY
-BUILDING
-VERIFYING
-VERIFIED
-MERGING
-FAILED
-RETRYING
-SKIPPED
-STALE
-```
-
-Example:
-
-```text
-PLANNED
-   ↓
-READY
-   ↓
-BUILDING
-   ↓
-VERIFYING
-   ↓
-VERIFIED
-```
-
-Failure:
-
-```text
-VERIFYING
-   ↓
-FAILED
-   ↓
-CLEANUP
-   ↓
-RETRYING
-```
-
-After retry limit:
-
-```text
-FAILED
-   ↓
-SKIPPED
-```
-
----
-
-# 9. Build Frontier
-
-The system must maintain a **build frontier**.
-
-The frontier contains nodes that are currently actionable.
-
-A node enters the frontier only when:
-
-```text
-node is READY
-AND
-required dependencies are VERIFIED
-AND
-parent context is valid
-AND
-required sockets/interfaces exist
-```
-
-The system must never blindly iterate through the original node list.
-
----
-
-# 10. Smart Scheduler
-
-The scheduler chooses the next buildable node.
-
-It should consider:
-
-```text
-dependency readiness
-parent readiness
-structural importance
-whether it blocks other nodes
-confidence
-estimated complexity
-previous failures
-whether it creates useful assembly progress
-```
-
-The scheduler may prioritize foundational pieces or independent branches.
-
-Example:
-
-```text
-Hull
-Deck
-Cannon
-Mast
-Railing
-Sail
-Armament
-Ship
-```
-
-The exact order is determined by the dependency graph and current state.
-
----
-
-# 11. Bottom-Up Progressive Assembly
-
-The system builds from reliable smaller units toward larger assemblies.
-
-Example:
-
-```text
-wheel
-barrel
-base
-   ↓
-CANNON
-   ↓
-CANNON ASSEMBLY VERIFIED
-```
-
-Then:
-
-```text
-Cannon
-Cannon
-Cannon
-Cannon
-   ↓
-ARMAMENT ASSEMBLY
-```
-
-Then:
-
-```text
-Hull
-Deck
-Armament
-Mast
-   ↓
-SHIP
-```
-
-Each merge is itself a build/verification boundary.
-
----
-
-# 12. Assembly Merge Operation
-
-A merge is a first-class operation.
-
-```text
-BUILD
- ↓
-VERIFY
- ↓
-LOCK
- ↓
-MERGE
- ↓
-VERIFY
- ↓
-LOCK
-```
-
-Example:
-
-```text
-wheel ✓
-barrel ✓
-base ✓
-      ↓
-    MERGE
-      ↓
-cannon
-      ↓
-   VERIFY
-      ↓
-    LOCK
-```
-
-The parent must never consume an unverified child as a trusted assembly.
-
----
-
-# 13. Assembly Contract
-
-Every assembly exposes an interface.
-
-Conceptually:
-
-```text
-AssemblyContract
-├── identity
-├── local coordinate system
-├── children
-├── dependencies
-├── bounding information
-├── sockets
-├── constraints
-├── expected geometry
-├── verification rules
-└── output interface
-```
-
-Example:
-
-```text
-CannonAssembly
-
-Internal:
-    barrel
-    base
-    wheel_left
-    wheel_right
-
-Public sockets:
-    base_bottom
-    barrel_forward
-
-Verification:
-    wheels exist
-    barrel exists
-    wheels contact carriage
-    barrel aligns with carriage
-```
-
-Parent assemblies must interact through the public interface.
-
-They must not depend on arbitrary internal geometry.
-
----
-
-# 14. Instance Definitions
-
-Repeated assemblies must distinguish:
-
-```text
-DEFINITION
-```
-
-from:
-
-```text
-INSTANCE
-```
-
-Example:
-
-```text
-cannon_definition
-    │
-    ├── cannon_instance_01
-    ├── cannon_instance_02
-    ├── cannon_instance_03
-    └── cannon_instance_04
-```
-
-The definition is built and verified once where possible.
-
-Instances provide placements.
-
-The architecture must support this even if the initial Blender implementation uses copied geometry rather than linked Blender instances.
-
----
-
-# 15. Failure Handling
-
-Failure must be surgical.
-
-Never automatically destroy the entire model because one child failed.
-
----
-
-## 15.1 Local Failure
-
-Example:
-
-```text
-CANNON
-├── barrel ✓
-├── base ✓
-├── wheel_left ✓
-└── wheel_right ✗
-```
-
-Action:
-
-```text
-remove wheel_right
- ↓
-retry wheel_right
- ↓
-verify cannon
-```
-
----
-
-## 15.2 Assembly Failure
-
-If local repair cannot resolve the problem:
-
-```text
-remove cannon assembly
- ↓
-rebuild cannon assembly
- ↓
-verify
-```
-
-Only the affected assembly is regenerated.
-
----
-
-## 15.3 Repeated Failure
-
-After configured retry limits:
-
-```text
-FAILED
- ↓
-SKIPPED
-```
-
-The parent must be informed.
-
----
-
-# 16. Required vs Optional Components
-
-Each node should carry a semantic importance classification.
-
-Conceptually:
-
-```text
-REQUIRED
-OPTIONAL
-DECORATIVE
-```
-
-If an optional node fails:
-
-```text
-node = SKIPPED
-parent = DEGRADED
-build may continue
-```
-
-If a required node fails:
-
-```text
-node = SKIPPED
-parent = BLOCKED
-```
-
-The root cannot report full success while required components are missing.
-
----
-
-# 17. Degraded Completion
-
-The final result must distinguish:
-
-```text
-SUCCESS
-```
-
-from:
-
-```text
-SUCCESS_WITH_OPTIONAL_COMPONENTS_SKIPPED
-```
-
-and:
-
-```text
-FAILED
-```
-
-Example:
-
-```text
-Expected cannons: 4
-Built cannons: 3
-Skipped: 1
-
-Final status:
-COMPLETED_DEGRADED
-```
-
-The system must never silently hide missing components.
-
----
-
-# 18. Cleanup Before Retry
-
-A failed node must not leave faulty geometry in the scene.
-
-Retry flow:
-
-```text
-FAIL
- ↓
-identify generation objects belonging to failed node
- ↓
-delete faulty generation objects
- ↓
-purge only owned temporary/orphan resources
- ↓
-restore last valid checkpoint
- ↓
-retry
-```
-
-Existing user scene objects must remain untouched.
-
----
-
-# 19. Checkpointing
-
-After every successful meaningful boundary:
-
-```text
-verified leaf
-verified sub-assembly
-verified assembly
-successful merge
-```
-
-the manifest should be checkpointed.
-
-Example:
-
-```text
-Checkpoint 1:
-Hull ✓
-
-Checkpoint 2:
-Hull ✓
-Deck ✓
-
-Checkpoint 3:
-Hull ✓
-Deck ✓
-Cannon ✓
-
-Checkpoint 4:
-Armament ✓
-```
-
-If the process crashes:
-
-```text
-load latest checkpoint
- ↓
-restore state
- ↓
-continue from frontier
-```
-
-Previously verified geometry must not be unnecessarily regenerated.
-
----
-
-# 20. Dirty Propagation
-
-If a previously verified component changes:
-
-```text
-Cannon changed
-```
-
-dependent nodes become:
-
-```text
-Cannon       DIRTY
-Armament     STALE
-Deck         STALE
-Ship         STALE
-```
-
-Unrelated branches remain:
-
-```text
-Hull         CLEAN
-Mast         CLEAN
-Sail         CLEAN
-```
-
-Only affected nodes need reconsideration.
-
----
-
-# 21. Progressive Verification
-
-Verification occurs at every level.
-
-## Part level
-
-```text
-geometry validity
-dimensions
-local bounds
-```
-
-## Assembly level
-
-```text
-child placement
-socket alignment
-intersections
-expected topology
-```
-
-## Parent level
-
-```text
-assembly placement
-assembly interfaces
-cross-assembly relationships
-```
-
-## Root level
-
-```text
-overall structure
-required components
-global spatial validity
-final dimensions
-```
-
-Verification therefore becomes:
-
-```text
-PART
- ↓
-SUB-ASSEMBLY
- ↓
-ASSEMBLY
- ↓
-MODEL
-```
-
----
-
-# 22. Existing Stage 0 Remains
-
-## Stage 0 — Object Understanding
-
-Input:
-
-```text
-Raw user prompt
-```
-
-Output:
-
-```text
-category
-rests_on_surface
-style_tag
-scale_anchor_m
-```
-
-This remains an LLM semantic stage.
-
-No change to the numeric-transform invariant.
-
----
-
-# 23. Stage 1 Becomes Node Topology
-
-The old Stage 1 generated a complete flat part topology.
-
-v5 changes this.
-
-Stage 1 operates on **one hierarchy node at a time**.
-
-Input:
-
-```text
-current node
-parent context
-model context
-```
-
-Output:
-
-```text
-children[]
-```
-
-Children may be:
-
-```text
-PART
-ASSEMBLY
-INSTANCE
-RELATIONSHIP
-```
-
-No raw transforms.
-
-No raw offsets.
-
----
-
-# 24. Stage 2 Becomes Node Dimensions
-
-Stage 2 operates only on the current build node.
-
-It produces dimensions for its immediate geometry.
-
-The existing dimension validation remains.
-
-Dimensions are validated against:
-
-```text
-scale_anchor
-parent dimensions
-child proportions
-known primitive constraints
-```
-
-Severe inconsistencies are rejected.
-
----
-
-# 25. Stage 3 Becomes Node Attachment Semantics
-
-Stage 3 operates on the current node.
-
-It provides closed-vocabulary semantic information:
-
-```text
-socket_type
-height_hint
-pierce_direction
-connects_to
-cut_face
-radial_count
-radial_index
-array_count
-array_index
-```
-
-It must never provide raw transform offsets.
-
----
-
-# 26. Stage 4 Remains Deterministic Resolution
-
-Stage 4 resolves transforms for the current node.
-
-It remains pure code.
-
-```text
-Stage 3 semantic hints
-+
-real geometry
-+
-parent/child interfaces
-        ↓
-Stage 4
-        ↓
-ResolvedTransform
-```
-
-All existing socket resolver rules remain unless explicitly superseded by the hierarchical assembly system.
-
----
-
-# 27. Stage 4.5 Modifier Intent
-
-Modifier intent continues to operate on the current node.
-
-Modifiers are applied only after geometry/boolean operations according to existing v4 rules.
-
----
-
-# 28. Stage 5 Blender Execution
-
-Stage 5 now executes a **single build transaction for the current node/assembly**.
-
-Each node receives its own generation scope.
-
-Example:
-
-```text
-sentinel_gen_<task>_<node>_<attempt>
-```
-
-This allows surgical deletion.
-
-No:
-
-```text
-clear_scene
-```
-
-is permitted.
-
-Existing user scene geometry remains untouched.
-
----
-
-# 29. Stage 6 Verification
+**Goal:** Build the data structures and manifest system. Nothing executes differently yet.
 
-Stage 6 verifies the current node.
-
-Existing verification mechanisms remain:
-
-1. spatial/interpenetration
-2. local mesh dimensions
-3. connector reach
-4. boolean postconditions
-
-Additional hierarchical checks are added:
-
-5. child completeness
-6. socket/interface validity
-7. dependency validity
-8. expected instance count
-9. assembly bounds
-10. parent attachment validity
-
-Verification must fail closed.
-
-```text
-verification exception
-        ↓
-FAIL
-```
-
-Never:
-
-```text
-exception
- ↓
-warning
- ↓
-SUCCESS
-```
-
----
-
-# 30. Retry Routing
-
-Failure determines the retry point.
-
-Example:
-
-```text
-Dimension failure
-    → Stage 2
-
-Semantic attachment failure
-    → Stage 3
-
-Socket/transform failure
-    → Stage 3/4
-
-Geometry generation failure
-    → Stage 5
-
-Modifier failure
-    → Stage 4.5
-
-Verification failure
-    → appropriate preceding stage
-
-Non-retryable mesh corruption
-    → rebuild node from clean checkpoint
-```
-
-Retry occurs only for the affected node whenever possible.
-
----
-
-# 31. Main Progressive Assembly Controller
-
-The high-level execution model becomes:
-
-```text
-Stage 0
-  ↓
-Create Model Manifest
-  ↓
-Recursive Hierarchical Decomposition
-  ↓
-Validate Hierarchy
-  ↓
-Build Dependency DAG
-  ↓
-Create Initial Build Frontier
-  ↓
-┌─────────────────────────────────────┐
-│         PROGRESSIVE LOOP             │
-│                                     │
-│  Pick best READY node               │
-│          ↓                          │
-│  Decompose if necessary             │
-│          ↓                          │
-│  Build node                         │
-│          ↓                          │
-│  Verify node                        │
-│       /       \                     │
-│     PASS      FAIL                  │
-│      ↓          ↓                   │
-│    LOCK      CLEANUP                │
-│      │          ↓                   │
-│      │       RETRY / SKIP           │
-│      │          │                   │
-│      └────┬─────┘                   │
-│           ↓                         │
-│    Update Manifest                  │
-│           ↓                         │
-│    Checkpoint                       │
-│           ↓                         │
-│    Can children merge?              │
-│       /          \                  │
-│     YES           NO                │
-│      ↓             ↓               │
-│   MERGE          NEXT NODE          │
-│      ↓                              │
-│   VERIFY                            │
-│      ↓                              │
-│   MOVE UP HIERARCHY                 │
-│                                     │
-│  Repeat until root resolved         │
-└─────────────────────────────────────┘
-  ↓
-Final Model Verification
-  ↓
-Commit
-  ↓
-Delete temporary build manifest
-```
-
----
-
-# 32. Important: Do Not Pre-build Every Leaf
-
-The recursive hierarchy may be known ahead of time, but the execution process must remain scheduler-driven.
-
-Do NOT require:
-
-```text
-build every leaf
-    ↓
-only then assemble
-```
-
-Instead:
-
-```text
-build useful verified node
-    ↓
-if parent can now progress
-    ↓
-merge
-    ↓
-continue
-```
-
-The scheduler should continuously reassess the build frontier.
-
----
-
-# 33. Jigsaw Principle
-
-The system should optimize for:
-
-> **Maximum verified structural progress per build action.**
-
-It should prefer pieces that:
-
-* unlock dependent nodes
-* establish important foundations
-* provide reusable definitions
-* validate critical interfaces
-* reduce uncertainty
-* enable parent assembly
-* are independently verifiable
-
-It should avoid spending excessive effort on low-value decorative details while major structural assemblies remain unresolved.
-
----
-
-# 34. Tree Depth vs Dependency Depth
-
-Do not use one `depth` value for all purposes.
-
-Maintain:
-
-```text
-hierarchy_depth
-dependency_depth
 ```
-
-Hierarchy:
-
-```text
-SHIP             0
- └── DECK        1
-      └── RAILING 2
-```
-
-Dependency:
-
-```text
-CANNON → ARMAMENT → DECK → SHIP
-```
-
-The two systems answer different questions.
-
----
-
-# 35. Cross-Assembly Connections
-
-Connections must use interfaces.
-
-Example:
-
-```text
-MAST
- └── rigging_anchor_A
-
-RAILING
- └── rigging_anchor_B
-
-RELATIONSHIP
- └── rope:
-       source = mast.rigging_anchor_A
-       target = railing.rigging_anchor_B
-```
-
-The connector's numeric geometry is computed deterministically from the resolved anchor positions.
-
----
-
-# 36. Manifest Lifecycle
-
-The manifest follows:
-
-```text
-CREATE
- ↓
-DECOMPOSE
- ↓
-PLAN
- ↓
-BUILD
- ↓
-CHECKPOINT
- ↓
-BUILD
- ↓
-CHECKPOINT
- ↓
-...
- ↓
-ROOT VERIFIED
- ↓
-FINAL COMMIT
- ↓
-DELETE TEMPORARY EXECUTION STATE
-```
-
-The manifest must be recoverable at every important boundary.
-
----
-
-# 37. Final Success Requirements
-
-`SUCCESS` is allowed only when:
-
-```text
-root verified
-AND
-all required children verified
-AND
-all required dependencies resolved
-AND
-all required interfaces valid
-AND
-final spatial verification passed
-AND
-no unresolved mandatory failures exist
-```
-
-If optional elements were skipped:
-
-```text
-COMPLETED_DEGRADED
-```
-
-If required elements failed:
-
-```text
-FAILED
-```
-
----
-
-# 38. Existing Blender Conventions Remain
-
-```text
-1 Blender unit = 1 meter
-
-Rotation order:
-Euler XYZ
-
-Internal rotation:
-radians
-
-Blender I/O:
-degrees where required
-
-Cylinder/cone:
-local +Z = depth axis
-
-Verification:
-LOCAL mesh bounds
-
-Existing socket resolver:
-preserved and extended where necessary
-```
-
----
-
-# 39. Existing v4 Safety Guarantees Remain Mandatory
-
-The following must NOT regress:
-
-* no `clear_scene`
-* generation-scoped collections
-* generation-prefixed object names
-* transactional execution
-* targeted orphan cleanup
-* rollback on failure
-* boolean ordering
-* local dimension verification
-* connector verification
-* fail-closed verification
-* deterministic transform resolution
-* no raw LLM transform numbers
-* Euler rotation composition through matrices
-* world-pose calculation through parent chains
-
----
-
-# 40. Recommended New File Structure
-
-The existing structure should evolve toward:
-
-```text
 backend/core/blender_pipeline/
-
-├── orchestrator.py
-│
-├── hierarchy/
-│   ├── decomposer.py
-│   ├── hierarchy_validator.py
-│   ├── scheduler.py
-│   ├── dependency_graph.py
-│   ├── frontier.py
-│   └── merger.py
-│
-├── state/
-│   ├── build_manifest.py
-│   ├── node_state.py
-│   ├── checkpoint.py
-│   └── dirty_propagation.py
-│
-├── stages/
-│   ├── stage0_understanding.py
-│   ├── stage1_topology.py
-│   ├── stage2_dimensions.py
-│   ├── stage3_semantics.py
-│   ├── stage4_resolver.py
-│   └── stage45_modifiers.py
-│
-├── execution/
-│   ├── executor.py
-│   ├── transaction.py
-│   └── cleanup.py
-│
-├── verification/
-│   ├── assembly_verification.py
-│   ├── node_verification.py
-│   └── hierarchy_verification.py
-│
-├── assembly_spec.py
-├── blender_ops.py
-└── broadcast.py
+├── progressive/                    ← NEW subdirectory
+│   ├── __init__.py
+│   ├── manifest.py                 ← BuildManifest, NodeState, ModelManifest
+│   ├── hierarchy.py                ← ContainmentTree, node CRUD, variable-depth
+│   ├── dependency_graph.py         ← DependencyDAG, topological sort, cycle detection
+│   └── node_types.py               ← NodeKind(PART|ASSEMBLY|INSTANCE|RELATIONSHIP)
 ```
 
-Exact naming can differ, but responsibilities should remain separated.
+#### New Files:
+
+**`manifest.py`** (~300 lines)
+```python
+class NodeState(str, Enum):
+    PLANNED = "planned"
+    DECOMPOSING = "decomposing"
+    READY = "ready"
+    BUILDING = "building"
+    VERIFYING = "verifying"
+    VERIFIED = "verified"
+    MERGING = "merging"
+    FAILED = "failed"
+    RETRYING = "retrying"
+    SKIPPED = "skipped"
+    STALE = "stale"
+
+class NodeImportance(str, Enum):
+    REQUIRED = "required"
+    OPTIONAL = "optional"
+    DECORATIVE = "decorative"
+
+class CompletionStatus(str, Enum):
+    SUCCESS = "success"
+    COMPLETED_DEGRADED = "completed_degraded"
+    FAILED = "failed"
+    IN_PROGRESS = "in_progress"
+
+@dataclass
+class ManifestNode:
+    node_id: str
+    label: str
+    kind: NodeKind                    # PART | ASSEMBLY | INSTANCE
+    state: NodeState = NodeState.PLANNED
+    importance: NodeImportance = NodeImportance.REQUIRED
+    parent_id: Optional[str] = None
+    children_ids: List[str] = field(default_factory=list)
+    dependency_ids: List[str] = field(default_factory=list)
+    instance_of: Optional[str] = None  # definition node_id for instances
+    retry_count: int = 0
+    max_retries: int = 3
+    hierarchy_depth: int = 0
+    stage_outputs: Dict[str, Any] = field(default_factory=dict)
+    verification_result: Optional[Dict] = None
+    error_message: Optional[str] = None
+    blender_objects: List[str] = field(default_factory=list)  # generation-scoped names
+    generation_id: Optional[str] = None
+
+class BuildManifest:
+    """Persistent build state — the v5 'working memory'."""
+    model_id: str
+    description: str
+    root_node_id: str
+    nodes: Dict[str, ManifestNode]
+    created_at: str
+    checkpoints: List[Dict]          # snapshot history
+    completion_status: CompletionStatus
+
+    def save(self, path: Path) -> None: ...
+    @classmethod
+    def load(cls, path: Path) -> "BuildManifest": ...
+    def checkpoint(self) -> None: ...
+    def get_node(self, node_id: str) -> ManifestNode: ...
+    def transition(self, node_id: str, new_state: NodeState) -> None: ...
+```
+
+**`hierarchy.py`** (~200 lines)
+```python
+class ContainmentTree:
+    """Variable-depth containment hierarchy with safety limits."""
+    MAX_HIERARCHY_DEPTH = 6
+    MAX_CHILDREN_PER_NODE = 12
+    MAX_TOTAL_NODES = 100
+    MAX_DECOMPOSITION_ATTEMPTS = 3
+
+    def add_child(self, parent_id, child_node) -> None: ...
+    def remove_subtree(self, node_id) -> List[str]: ...   # returns removed IDs
+    def get_leaves(self) -> List[ManifestNode]: ...
+    def get_ancestors(self, node_id) -> List[str]: ...
+    def validate(self) -> List[str]: ...                    # returns errors
+```
+
+**`dependency_graph.py`** (~200 lines)
+```python
+class DependencyDAG:
+    """Directed acyclic graph for build ordering."""
+    def add_dependency(self, node_id, depends_on_id) -> None: ...
+    def topological_sort(self) -> List[str]: ...
+    def detect_cycles(self) -> List[List[str]]: ...
+    def get_ready_nodes(self, completed: Set[str]) -> List[str]: ...
+    def get_blocked_by(self, node_id) -> List[str]: ...     # what blocks this node
+```
+
+**Tests:** ~15 unit tests for manifest CRUD, hierarchy validation, DAG cycle detection, topological sort, checkpoint save/load.
+
+**Connects to existing code:** Uses `NodeKind` ← extends `PartParadigm`. `ManifestNode` wraps `AssemblyNode` fields but adds state machine and persistence.
 
 ---
 
-# 41. New Primary Execution Abstraction
+### Phase 2: Decomposer + Frontier + Scheduler — ~800 new lines
 
-The pipeline should conceptually move from:
+**Goal:** The LLM can recursively decompose a prompt into a hierarchy, and the scheduler picks build order.
 
-```text
-run_staged_pipeline(prompt)
+```
+backend/core/blender_pipeline/progressive/
+├── decomposer.py                   ← RecursiveDecomposer (Stage 0.5)
+├── frontier.py                     ← BuildFrontier
+└── scheduler.py                    ← SmartScheduler
 ```
 
-toward:
+**`decomposer.py`** (~400 lines)
+```python
+class RecursiveDecomposer:
+    """Stage 0.5: Converts model understanding into variable-depth hierarchy.
 
-```text
-run_progressive_assembly(prompt)
+    Uses existing Stage 1 (topology) as the leaf-level decomposition,
+    but adds recursive splitting with smart stop conditions.
+    """
+    async def decompose(
+        self,
+        prompt: str,
+        stage0: ObjectUnderstanding,
+        manifest: BuildManifest,
+        model_manager: Any,
+    ) -> None:
+        """Mutates manifest in-place, adding hierarchy."""
+        ...
+
+    def _should_decompose(self, node: ManifestNode) -> bool:
+        """Blueprint §4.2 stop conditions: geometric manageability,
+        semantic cohesion, independent verifiability, interface clarity,
+        complexity budget."""
+        ...
+
+    async def _decompose_node(self, node: ManifestNode, ...) -> List[ManifestNode]:
+        """Single LLM call to split one node into children.
+        Re-uses Stage1Topology prompt patterns."""
+        ...
 ```
 
-Internally:
+**Key design:** The decomposer calls the LLM once per non-leaf node. It re-uses `Stage1Topology._build_system_prompt()` patterns but scoped to a single node's context rather than the whole model. Stop conditions are evaluated by **code** (not LLM), matching blueprint §4.2 A–F.
 
-```text
-manifest
- ↓
-scheduler
- ↓
-node
- ↓
-node pipeline
- ↓
-verification
- ↓
-manifest update
- ↓
-scheduler
+**`frontier.py`** (~150 lines)
+```python
+class BuildFrontier:
+    """Maintains the set of currently-actionable nodes.
+    Blueprint §9: node enters frontier only when READY + deps VERIFIED + parent valid."""
+
+    def refresh(self, manifest: BuildManifest, dag: DependencyDAG) -> List[str]:
+        """Recompute frontier from current state."""
+        ...
+
+    def pop_next(self, scheduler: SmartScheduler) -> Optional[str]:
+        """Pick and remove the highest-priority frontier node."""
+        ...
 ```
 
-The existing Stage 0–6 logic should be reused inside this loop rather than duplicated.
+**`scheduler.py`** (~250 lines)
+```python
+class SmartScheduler:
+    """Blueprint §10: Picks best READY node considering dependency readiness,
+    structural importance, blocking count, previous failures, and assembly progress.
+
+    Scoring function:
+        score = (blocks_others * 3) + (is_foundation * 2) + (is_definition * 2)
+              - (retry_count * 1) - (estimated_complexity * 0.5)
+    """
+    def score_node(self, node_id: str, manifest: BuildManifest, dag: DependencyDAG) -> float: ...
+    def pick_best(self, frontier: List[str], manifest: BuildManifest, dag: DependencyDAG) -> str: ...
+```
+
+**Tests:** ~12 tests — decomposer stop conditions, frontier refresh logic, scheduler priority ordering, instance detection.
 
 ---
 
-# 42. Fundamental Architectural Rule
+### Phase 3: Progressive Controller + Merge — ~1000 new lines
 
-The most important new rule is:
+**Goal:** The main progressive build loop. This is the core of v5.
 
-> **A stage operates on a node; the progressive controller operates on the model.**
-
-Stages answer:
-
-```text
-How should THIS node be built?
+```
+backend/core/blender_pipeline/progressive/
+├── controller.py                   ← ProgressiveAssemblyController (main loop)
+├── merger.py                       ← AssemblyMerger (combine verified children)
+├── checkpoint.py                   ← CheckpointManager (save/restore)
+└── dirty_propagation.py            ← DirtyPropagator (STALE cascade)
 ```
 
-The controller answers:
+**`controller.py`** (~500 lines) — The Heart of v5
+```python
+class ProgressiveAssemblyController:
+    """Blueprint §31: Main progressive assembly loop.
 
-```text
-Which node should be built next?
-Should it be decomposed?
-Did it succeed?
-Should it be retried?
-Can it merge?
-What became available?
-What became stale?
-Is the model complete?
+    run_progressive_assembly(prompt) replaces run_staged_pipeline(prompt).
+
+    Internally re-uses existing Stage 0–6 logic per-node.
+    """
+    async def run(self, prompt: str, model_manager: Any, mcp_manager: Any,
+                  task_id: str) -> ProgressiveResult:
+        # Stage 0: Object Understanding (unchanged)
+        stage0 = await Stage0Understanding.run(...)
+
+        # Stage 0.5: Recursive Decomposition (NEW)
+        manifest = BuildManifest.create(model_id, prompt)
+        await RecursiveDecomposer().decompose(prompt, stage0, manifest, model_manager)
+
+        # Build DAG and initial frontier
+        dag = DependencyDAG.from_manifest(manifest)
+        frontier = BuildFrontier()
+        scheduler = SmartScheduler()
+
+        # ═══ PROGRESSIVE LOOP ═══
+        while not manifest.is_root_resolved():
+            node_id = frontier.pop_next(scheduler)
+            if node_id is None:
+                break  # deadlock or all done
+
+            node = manifest.get_node(node_id)
+
+            # Per-node pipeline: Stages 1–6 scoped to THIS node
+            success = await self._build_node(node, manifest, stage0, ...)
+
+            if success:
+                manifest.transition(node_id, NodeState.VERIFIED)
+                checkpoint_mgr.checkpoint(manifest)
+
+                # Can parent merge?
+                if self._can_merge_parent(node, manifest):
+                    await merger.merge(node.parent_id, manifest, ...)
+            else:
+                await self._handle_failure(node, manifest, ...)
+
+            frontier.refresh(manifest, dag)
+
+        # Final model verification
+        ...
+        return ProgressiveResult(...)
+
+    async def _build_node(self, node, manifest, stage0, ...):
+        """Run stages 1→6 for a single node.
+        Re-uses existing Stage classes, scoped to node context."""
+        # Stage 1: Topology (for this node's children if ASSEMBLY)
+        # Stage 2: Dimensions (for this node)
+        # Stage 3: Semantics (for this node)
+        # Stage 4: Resolver (for this node — uses parent geometry as context)
+        # Stage 4.5: Modifiers
+        # Stage 5: Blender execution (own generation scope)
+        # Stage 6: Verification
+        ...
 ```
 
-This separation must be maintained.
+> [!IMPORTANT]
+> The key insight: **existing Stage 1–6 classes are re-used inside the loop**, not duplicated. Each stage just receives a narrower context (one node + parent geometry) instead of the whole model.
+
+**`merger.py`** (~200 lines)
+```python
+class AssemblyMerger:
+    """Blueprint §12: Merge verified children into parent assembly.
+    Build → Verify → Lock → Merge → Verify → Lock."""
+
+    async def merge(self, parent_id: str, manifest: BuildManifest,
+                    mcp_manager: Any) -> bool:
+        """Combine all VERIFIED children of parent into a single assembly.
+        Uses existing JoinMode logic from assembly_spec.py."""
+        ...
+
+    async def _verify_merge(self, parent_id: str, manifest: BuildManifest,
+                           mcp_manager: Any) -> bool:
+        """Assembly-level verification after merge.
+        Uses existing AssemblyVerificationGate."""
+        ...
+```
+
+**`checkpoint.py`** (~100 lines)
+```python
+class CheckpointManager:
+    """Blueprint §19: Saves manifest state at verification boundaries."""
+    def checkpoint(self, manifest: BuildManifest) -> None: ...
+    def restore_latest(self, model_id: str) -> Optional[BuildManifest]: ...
+    def list_checkpoints(self, model_id: str) -> List[Dict]: ...
+```
+
+**`dirty_propagation.py`** (~100 lines)
+```python
+class DirtyPropagator:
+    """Blueprint §20: When a node changes, mark dependents STALE."""
+    def propagate(self, changed_node_id: str, manifest: BuildManifest,
+                  dag: DependencyDAG) -> List[str]: ...  # returns newly-stale IDs
+```
+
+**Tests:** ~20 tests — progressive loop with mock LLM, merge verification, checkpoint save/restore, dirty propagation, degraded completion, failure handling.
 
 ---
 
-# 43. Target Architecture
+### Phase 4: Integration + Feature Flag — ~400 new lines of glue
 
-The final conceptual system is:
+**Goal:** Wire v5 into the agent and API. Keep v4 as fallback.
 
-```text
-                         USER
-                           │
-                           ▼
-                  MODEL UNDERSTANDING
-                           │
-                           ▼
-                RECURSIVE DECOMPOSER
-                           │
-                           ▼
-              ┌────────────────────────┐
-              │     MODEL MANIFEST     │
-              │                        │
-              │  Containment Tree      │
-              │  Dependency DAG        │
-              │  Relationships         │
-              │  Instances             │
-              │  Sockets               │
-              │  Build State           │
-              │  Verification State    │
-              └───────────┬────────────┘
-                          │
-                          ▼
-                    SMART SCHEDULER
-                          │
-                          ▼
-                 BUILD FRONTIER
-                          │
-                          ▼
-             ┌────────────────────────┐
-             │   CURRENT NODE         │
-             │                        │
-             │  Topology              │
-             │  Dimensions            │
-             │  Semantics             │
-             │  Resolver              │
-             │  Modifiers             │
-             │  Blender               │
-             │  Verification          │
-             └───────────┬────────────┘
-                         │
-                    PASS / FAIL
-                    /         \
-                 PASS         FAIL
-                  │             │
-                LOCK        CLEANUP
-                  │             │
-                  │        RETRY / SKIP
-                  │             │
-                  └──────┬──────┘
-                         ▼
-                  UPDATE MANIFEST
-                         │
-                         ▼
-                    CHECKPOINT
-                         │
-                         ▼
-                  CAN MERGE UP?
-                    /        \
-                  YES         NO
-                   │           │
-                 MERGE       NEXT NODE
-                   │
-                   ▼
-                VERIFY
-                   │
-                   ▼
-              MOVE UP TREE
-                   │
-                  ...
-                   │
-                   ▼
-              ROOT VERIFIED
-                   │
-                   ▼
-           FINAL MODEL VERIFICATION
-                   │
-                   ▼
-                  COMMIT
-                   │
-                   ▼
-          DELETE TEMPORARY STATE
+**Changes to existing files:**
+
+1. **[`endpoint_agent.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/agents/endpoint_agent.py)** — Add `blender:build_progressive` tool alongside existing `blender:build_spec`
+2. **[`executor.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/blender_pipeline/executor.py)** — Add `run_node_pipeline()` method (node-scoped variant of `run_staged_pipeline_and_execute()`)
+3. **[`assembly_spec.py`](file:///c:/Users/derik/Desktop/Derik/Projects/CUA-Sentinel/backend/core/assembly_spec.py)** — Add `AssemblyContract` class for public interface declaration
+4. **Config:** Add `pipeline_version: "v4" | "v5"` to `mcp_apps.yaml` or `system_config.json`
+
+```python
+# In endpoint_agent.py — tool registration
+{
+    "name": "blender:build_progressive",
+    "description": "Build a complex 3D model using progressive hierarchical assembly (v5)",
+    "params": {"description": "str — natural language object description"},
+}
+```
+
+**Feature flag logic:**
+```python
+if config.get("pipeline_version", "v4") == "v5":
+    result = await ProgressiveAssemblyController().run(...)
+else:
+    result = await StagedPipelineOrchestrator.run(...)
 ```
 
 ---
 
-# 44. Definition of Done
+### Phase 5: Instance Support + Cross-Assembly — ~500 new lines
 
-The v5 architecture is considered correctly implemented when the system can:
+**Goal:** Blueprint §14 (instances) and §35 (cross-assembly connections).
 
-1. Accept a complex model request.
-2. Create a hierarchical model plan.
-3. Recursively decompose only where necessary.
-4. Stop decomposition at different depths for different branches.
-5. Persist the complete build state.
-6. Determine a dependency-aware build frontier.
-7. Build one independently meaningful node at a time.
-8. Verify each node before trusting it.
-9. Remove faulty geometry after failure.
-10. Retry only the affected node whenever possible.
-11. Skip failed optional components without corrupting the parent.
-12. Block parents when required components fail.
-13. Merge verified children into progressively larger assemblies.
-14. Verify every merge.
-15. Maintain instance definitions separately from placements.
-16. Track cross-assembly socket relationships.
-17. Checkpoint successful progress.
-18. Resume after process interruption.
-19. Propagate changes only to affected dependents.
-20. Produce a final verified root model.
-21. Delete temporary execution state after successful completion.
-22. Preserve all v4 deterministic geometry and Blender safety guarantees.
+```
+backend/core/blender_pipeline/progressive/
+├── instances.py                    ← InstanceManager (definition vs placement)
+└── relationships.py                ← RelationshipGraph (cross-assembly sockets)
+```
+
+**`instances.py`** (~250 lines)
+- Build definition once, create N instances via mesh copy (Phase 1) or linked duplicate (later)
+- Instance nodes have `instance_of` pointing to definition `node_id`
+- Definition is built and verified once; instances only need placement verification
+
+**`relationships.py`** (~250 lines)
+- Cross-assembly socket connections (e.g., mast ↔ railing rigging)
+- Socket positions resolved after both assemblies are VERIFIED
+- Connector geometry computed deterministically from anchor world positions
 
 ---
 
-# 45. Final Design Principle
+## 5. File Structure Summary
 
-The pipeline is no longer:
-
-```text
-PROMPT
- ↓
-GENERATE EVERYTHING
- ↓
-BLENDER
+```
+backend/core/blender_pipeline/
+├── orchestrator.py                 ← KEEP (v4 entry point, now wraps v5 too)
+├── executor.py                     ← EXTEND (add run_node_pipeline)
+├── stage0_understanding.py         ← KEEP (reused in v5)
+├── stage1_topology.py              ← KEEP (reused per-node in v5)
+├── stage2_dimensions.py            ← KEEP (reused per-node in v5)
+├── stage3_semantics.py             ← KEEP (reused per-node in v5)
+├── stage4_resolver.py              ← KEEP (reused per-node in v5)
+├── stage45_modifiers.py            ← KEEP (reused per-node in v5)
+├── broadcast.py                    ← KEEP (extended with node-level events)
+├── primitive_readback.py           ← KEEP
+│
+└── progressive/                    ← ALL NEW
+    ├── __init__.py
+    ├── controller.py               ← Main loop (§31)
+    ├── manifest.py                 ← BuildManifest + NodeState (§6, §8)
+    ├── hierarchy.py                ← ContainmentTree (§2.1, §3)
+    ├── dependency_graph.py         ← DependencyDAG (§2.2)
+    ├── decomposer.py               ← RecursiveDecomposer (§4, §5)
+    ├── frontier.py                 ← BuildFrontier (§9)
+    ├── scheduler.py                ← SmartScheduler (§10)
+    ├── merger.py                   ← AssemblyMerger (§12)
+    ├── checkpoint.py               ← CheckpointManager (§19)
+    ├── dirty_propagation.py        ← DirtyPropagator (§20)
+    ├── instances.py                ← InstanceManager (§14) — Phase 5
+    └── relationships.py            ← RelationshipGraph (§35) — Phase 5
 ```
 
-It is:
+**New lines:** ~3900 across 12 new files  
+**Modified lines:** ~400 across 3 existing files  
+**Deleted lines:** 0 (v4 preserved as fallback)
 
-```text
-PROMPT
- ↓
-UNDERSTAND
- ↓
-DECOMPOSE
- ↓
-PLAN
- ↓
-SELECT NEXT PIECE
- ↓
-BUILD
- ↓
-VERIFY
- ↓
-LOCK
- ↓
-MERGE
- ↓
-VERIFY
- ↓
-SELECT NEXT PIECE
- ↓
-...
- ↓
-COMPLETE MODEL
+---
+
+## 6. What Gets Reused vs Written Fresh
+
+| Component | Reuse | New |
+|-----------|-------|-----|
+| Stage 0 Understanding | 100% reuse | — |
+| Stage 1 Topology | ~80% reuse (prompt patterns) | Node-scoped wrapper |
+| Stage 2 Dimensions | ~80% reuse | Node-scoped wrapper |
+| Stage 3 Semantics | ~80% reuse | Node-scoped wrapper |
+| Stage 4 Resolver | 100% reuse (1489 lines!) | — |
+| Stage 4.5 Modifiers | 100% reuse | — |
+| `graph_to_blender_steps()` | 100% reuse (668 lines) | — |
+| `AssemblyVerificationGate` | 100% reuse (493 lines) | Hierarchy-level extension |
+| `SceneTransaction` | 100% reuse (212 lines) | — |
+| `AssemblyFeedbackEngine` | ~70% reuse | Extend for SKIP/DEGRADED |
+| `blender_ops.py` | 100% reuse (1624 lines) | — |
+| `broadcast.py` | ~90% reuse | Add node-level events |
+
+**Reuse ratio: ~6500 lines reused / ~3900 new = 62% reuse**
+
+---
+
+## 7. Test Strategy
+
+| Phase | New Tests | What They Cover |
+|-------|-----------|-----------------|
+| Phase 1 | 15 | Manifest CRUD, hierarchy validation, DAG cycle detection, checkpoint I/O |
+| Phase 2 | 12 | Decomposer stop conditions, frontier logic, scheduler priority |
+| Phase 3 | 20 | Progressive loop (mock LLM), merge verification, dirty propagation, degraded completion |
+| Phase 4 | 8 | Feature flag routing, integration with endpoint_agent |
+| Phase 5 | 10 | Instance placement, cross-assembly sockets |
+| **Total** | **65** | Added to existing 96 → **161 total** |
+
+---
+
+## 8. Risk Assessment
+
+| Risk | Mitigation |
+|------|------------|
+| Recursive decomposition produces too many nodes | Hard limits (§4.3): MAX_TOTAL_NODES=100, MAX_DEPTH=6 |
+| LLM produces inconsistent hierarchies across calls | Code validates structure; LLM only provides semantics |
+| Checkpoint file corruption on crash | JSON with atomic write (write to .tmp, rename) |
+| Merge verification catches false positives | Reuse existing BVH tolerance thresholds (2mm gap, 0.5mm overlap) |
+| v5 slower than v4 for simple objects | Decomposer evaluates complexity first; simple objects stay as single leaf → same speed as v4 |
+| Breaking existing tests | v4 preserved behind feature flag; existing test suite unchanged |
+
+---
+
+## 9. Recommended Implementation Order
+
+```mermaid
+flowchart LR
+    P1["Phase 1\nFoundation\n~1200 lines"] --> P2["Phase 2\nDecomposer\n~800 lines"]
+    P2 --> P3["Phase 3\nController\n~1000 lines"]
+    P3 --> P4["Phase 4\nIntegration\n~400 lines"]
+    P4 --> P5["Phase 5\nInstances\n~500 lines"]
 ```
 
-The model is solved progressively like a jigsaw puzzle.
+**Estimated effort per phase:**
+- Phase 1: 1 session (data structures only, no LLM calls needed)
+- Phase 2: 1–2 sessions (LLM integration for decomposer)
+- Phase 3: 2–3 sessions (most complex — the progressive loop)
+- Phase 4: 1 session (wiring + feature flag)
+- Phase 5: 1–2 sessions (can be deferred)
 
-The system should always know:
+---
 
-```text
-WHAT IS ALREADY SOLVED
-WHAT IS CURRENTLY BEING SOLVED
-WHAT CAN BE SOLVED NEXT
-WHAT FAILED
-WHAT MUST BE RETRIED
-WHAT CAN BE SKIPPED
-WHAT CAN NOW BE MERGED
-WHAT BECAME INVALID
-WHAT REMAINS BEFORE THE ROOT IS COMPLETE
-```
+## 10. Definition of Done (from Blueprint §44, mapped to phases)
 
-This state-driven progressive assembly model is the foundation for complex-model reliability.
+| # | Requirement | Phase |
+|---|-------------|-------|
+| 1 | Accept complex model request | Phase 3 |
+| 2 | Hierarchical model plan | Phase 2 |
+| 3 | Recursive decomposition only where necessary | Phase 2 |
+| 4 | Different depths for different branches | Phase 1+2 |
+| 5 | Persist complete build state | Phase 1 |
+| 6 | Dependency-aware build frontier | Phase 2 |
+| 7 | Build one node at a time | Phase 3 |
+| 8 | Verify each node | Phase 3 |
+| 9 | Remove faulty geometry | Phase 3 (reuse SceneTransaction) |
+| 10 | Retry only affected node | Phase 3 |
+| 11 | Skip optional components | Phase 3 |
+| 12 | Block parents on required failure | Phase 3 |
+| 13 | Merge verified children | Phase 3 |
+| 14 | Verify every merge | Phase 3 |
+| 15 | Instance definitions vs placements | Phase 5 |
+| 16 | Cross-assembly socket relationships | Phase 5 |
+| 17 | Checkpoint successful progress | Phase 3 |
+| 18 | Resume after interruption | Phase 3 |
+| 19 | Propagate changes to dependents only | Phase 3 |
+| 20 | Final verified root model | Phase 3 |
+| 21 | Delete temporary state after success | Phase 3 |
+| 22 | Preserve all v4 safety guarantees | All phases |

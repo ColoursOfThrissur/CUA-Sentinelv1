@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, Cpu, Power, ShieldAlert, Sun, Moon, Palette } from 'lucide-react'
-import { settingsApi, modelsApi } from '../api'
+import { ArrowLeft, Cpu, Power, ShieldAlert, Sun, Moon, Palette, Activity } from 'lucide-react'
+import { settingsApi, modelsApi, type BackgroundService } from '../api'
 import './Settings.css'
 
 export default function Settings() {
   const navigate = useNavigate()
   const [models,      setModels]      = useState<Record<string, unknown>[]>([])
   const [systemState, setSystemState] = useState<Record<string, string>>({})
+  const [services,    setServices]    = useState<BackgroundService[]>([])
   const [theme,       setTheme]       = useState<'dark' | 'light'>(() => {
     return (localStorage.getItem('sentinel_theme') as 'dark' | 'light') || 'dark'
   })
@@ -15,7 +16,13 @@ export default function Settings() {
   useEffect(() => {
     modelsApi.list().then((r) => setModels(Array.isArray(r.data) ? r.data : []))
     settingsApi.getSystemState().then((r) => setSystemState(r.data && typeof r.data === 'object' ? r.data : {}))
+    settingsApi.getBackgroundServices().then((r) => setServices(Array.isArray(r.data) ? r.data : []))
   }, [])
+
+  const handleToggleService = async (id: string) => {
+    const r = await settingsApi.toggleBackgroundService(id)
+    setServices(prev => prev.map(s => s.id === id ? { ...s, enabled: r.data.enabled } : s))
+  }
 
   const applyTheme = (newTheme: 'dark' | 'light') => {
     setTheme(newTheme)
@@ -130,6 +137,32 @@ export default function Settings() {
               </button>
             </div>
           )}
+        </div>
+
+        <div className="panel settings-section">
+          <div className="settings-section-header">
+            <Activity size={16} style={{ color: '#a78bfa' }} />
+            <h2>Background Services</h2>
+          </div>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: 12 }}>
+            Changes take effect on next restart. All services are disabled by default.
+          </p>
+          <div className="models-list">
+            {services.map((s) => (
+              <div key={s.id} className="model-row">
+                <div>
+                  <p className="model-name">{s.label}</p>
+                  <p className="model-meta">{s.description}</p>
+                </div>
+                <button
+                  onClick={() => handleToggleService(s.id)}
+                  className={`btn btn-ghost ${s.enabled ? 'model-toggle-on' : 'model-toggle-off'}`}
+                >
+                  {s.enabled ? 'Enabled' : 'Disabled'}
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="panel settings-section">
