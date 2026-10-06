@@ -130,7 +130,7 @@ class InstanceManager:
             )
         
         # Compute world transform for instance
-        world_pos, world_rot = self._compute_instance_transform(instance_node, manifest)
+        world_pos, world_rot, scale = self._compute_instance_transform(instance_node, manifest)
         
         # Generate unique name for instance
         gen_short = uuid.uuid4().hex[:6]
@@ -139,11 +139,11 @@ class InstanceManager:
         # Create instance in Blender
         if use_linked:
             script = self._linked_duplicate_script(
-                definition_object, instance_name, world_pos, world_rot
+                definition_object, instance_name, world_pos, world_rot, scale
             )
         else:
             script = self._full_copy_script(
-                definition_object, instance_name, world_pos, world_rot
+                definition_object, instance_name, world_pos, world_rot, scale
             )
         
         try:
@@ -205,7 +205,7 @@ class InstanceManager:
             # Build placement data
             placements = []
             for node in nodes:
-                world_pos, world_rot = self._compute_instance_transform(node, manifest)
+                world_pos, world_rot, scale = self._compute_instance_transform(node, manifest)
                 gen_short = uuid.uuid4().hex[:6]
                 instance_name = f"g{gen_short}_{node.label}"
                 placements.append({
@@ -213,6 +213,7 @@ class InstanceManager:
                     "name": instance_name,
                     "position": world_pos,
                     "rotation": world_rot,
+                    "scale": scale,
                 })
             
             # Batch create
@@ -244,30 +245,35 @@ class InstanceManager:
         node: "ManifestNode",
         manifest: "BuildManifest",
     ) -> tuple:
-        """Compute world transform for an instance node."""
-        import math
+        """Compute world transform for an instance node using hierarchical matrix composition."""
+        # Prefer transform_state.world_matrix if resolved (authoritative hierarchical composition)
+        if node.transform_state and node.transform_state.world_matrix is not None:
+            wm = node.transform_state.world_matrix
+            return list(wm.position), list(wm.rotation), list(wm.scale)
         
-        # Get local offset from attachment
+        # If transform_state has local_transform and parent has world_matrix, compose them
+        if node.parent_id and node.transform_state and node.transform_state.local_transform:
+            parent = manifest.nodes.get(node.parent_id)
+            if parent and parent.transform_state and parent.transform_state.world_matrix is not None:
+                parent_wm = parent.transform_state.world_matrix
+                wm = node.transform_state.compute_world(parent_wm)
+                return list(wm.position), list(wm.rotation), list(wm.scale)
+
         local_offset = list(node.attachment.local_offset) if node.attachment else [0, 0, 0]
         local_rot = list(node.attachment.local_rotation) if node.attachment else [0, 0, 0]
         
-        # If no parent, place at local offset
         if not node.parent_id:
-            return local_offset, local_rot
+            return local_offset, local_rot, [1.0, 1.0, 1.0]
         
-        # Get parent's world position from bounding box
         parent = manifest.nodes.get(node.parent_id)
         if not parent or not parent.bounding_box:
-            return local_offset, local_rot
+            return local_offset, local_rot, [1.0, 1.0, 1.0]
         
         pmin = parent.bounding_box.get("min", [0, 0, 0])
         pmax = parent.bounding_box.get("max", [0, 0, 0])
         parent_center = [(pmin[i] + pmax[i]) / 2 for i in range(3)]
-        
-        # World position = parent center + local offset
         world_pos = [parent_center[i] + local_offset[i] for i in range(3)]
-        
-        return world_pos, local_rot
+        return world_pos, local_rot, [1.0, 1.0, 1.0]
     
     def _linked_duplicate_script(
         self,
@@ -275,8 +281,10 @@ class InstanceManager:
         name: str,
         pos: List[float],
         rot: List[float],
+        scale: Optional[List[float]] = None,
     ) -> str:
         """Script to create a linked duplicate (shares mesh data)."""
+        scale_vec = scale if scale is not None else [1.0, 1.0, 1.0]
         return f'''
 import bpy
 import json
@@ -286,6 +294,7 @@ source_name = {repr(source)}
 new_name = {repr(name)}
 pos = {pos}
 rot_deg = {rot}
+scale_vec = {scale_vec}
 
 source = bpy.data.objects.get(source_name)
 if not source:
@@ -298,6 +307,7 @@ else:
     
     new_obj.location = tuple(pos)
     new_obj.rotation_euler = tuple(math.radians(r) for r in rot_deg)
+    new_obj.scale = tuple(scale_vec)
     
     # Link to same collection as source
     for coll in source.users_collection:
@@ -317,8 +327,10 @@ print("SENTINEL_OUTPUT_START" + json.dumps(result) + "SENTINEL_OUTPUT_END")
         name: str,
         pos: List[float],
         rot: List[float],
+        scale: Optional[List[float]] = None,
     ) -> str:
         """Script to create a full copy (independent mesh)."""
+        scale_vec = scale if scale is not None else [1.0, 1.0, 1.0]
         return f'''
 import bpy
 import json
@@ -328,6 +340,7 @@ source_name = {repr(source)}
 new_name = {repr(name)}
 pos = {pos}
 rot_deg = {rot}
+scale_vec = {scale_vec}
 
 source = bpy.data.objects.get(source_name)
 if not source:
@@ -342,6 +355,7 @@ else:
     
     new_obj.location = tuple(pos)
     new_obj.rotation_euler = tuple(math.radians(r) for r in rot_deg)
+    new_obj.scale = tuple(scale_vec)
     
     for coll in source.users_collection:
         coll.objects.link(new_obj)
@@ -390,6 +404,8 @@ else:
         
         new_obj.location = tuple(p["position"])
         new_obj.rotation_euler = tuple(math.radians(r) for r in p["rotation"])
+        if "scale" in p and p["scale"]:
+            new_obj.scale = tuple(p["scale"])
         
         if target_coll:
             target_coll.objects.link(new_obj)

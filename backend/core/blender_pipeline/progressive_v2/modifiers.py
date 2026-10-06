@@ -54,7 +54,7 @@ class ModifierSpec:
     
     # Common
     name: Optional[str] = None  # Auto-generated if not provided
-    apply: bool = True  # Whether to apply (destructive) or keep live
+    apply: bool = False  # Keep live (non-destructive) by default, apply only on export
     
     # Subdivision Surface
     subdivision_levels: int = 2
@@ -146,7 +146,7 @@ class ModifierSpec:
         return cls(
             type=ModifierType(d.get("type", "bevel")),
             name=d.get("name"),
-            apply=d.get("apply", True),
+            apply=d.get("apply", False),
             subdivision_levels=d.get("subdivision_levels", 2),
             subdivision_render_levels=d.get("subdivision_render_levels", 2),
             subdivision_type=d.get("subdivision_type", "CATMULL_CLARK"),
@@ -217,8 +217,8 @@ def get_modifier_preset(preset_name: str) -> List[ModifierSpec]:
         "beveled": [
             ModifierSpec(
                 type=ModifierType.BEVEL,
-                bevel_width=0.01,
-                bevel_segments=2,
+                bevel_width=0.003,
+                bevel_segments=3,
                 bevel_angle_limit=30.0,
             ),
         ],
@@ -226,7 +226,7 @@ def get_modifier_preset(preset_name: str) -> List[ModifierSpec]:
         "beveled_heavy": [
             ModifierSpec(
                 type=ModifierType.BEVEL,
-                bevel_width=0.03,
+                bevel_width=0.006,
                 bevel_segments=4,
                 bevel_angle_limit=30.0,
             ),
@@ -235,7 +235,7 @@ def get_modifier_preset(preset_name: str) -> List[ModifierSpec]:
         "rounded": [
             ModifierSpec(
                 type=ModifierType.BEVEL,
-                bevel_width=0.015,
+                bevel_width=0.004,
                 bevel_segments=3,
                 bevel_angle_limit=30.0,
             ),
@@ -272,7 +272,7 @@ def get_modifier_preset(preset_name: str) -> List[ModifierSpec]:
         "game_ready": [
             ModifierSpec(
                 type=ModifierType.TRIANGULATE,
-                apply=True,
+                apply=False,
             ),
             ModifierSpec(
                 type=ModifierType.WEIGHTED_NORMAL,
@@ -321,6 +321,9 @@ def get_modifiers_for_style(style_hint: str) -> List[ModifierSpec]:
     if any(w in style_lower for w in ["organic", "soft", "natural", "curved"]):
         return get_modifier_preset("smooth")
     
+    if any(w in style_lower for w in ["smooth"]):
+        return get_modifier_preset("rounded")
+    
     if any(w in style_lower for w in ["rounded", "soft edge", "smooth edge"]):
         return get_modifier_preset("rounded")
     
@@ -338,3 +341,37 @@ def get_modifiers_for_style(style_hint: str) -> List[ModifierSpec]:
     
     # Default: light bevel for most objects
     return get_modifier_preset("beveled")
+
+
+def ensure_manifest_modifiers(manifest: Any, *, enabled: bool = True) -> Dict[str, Any]:
+    """Resolve style-driven modifiers before the executable plan freezes."""
+    from .node_types import NodeKind
+
+    assigned: List[str] = []
+    explicit: List[str] = []
+    disabled: List[str] = []
+    for node in manifest.nodes.values():
+        if node.kind not in (NodeKind.PART, NodeKind.DEFINITION):
+            continue
+        stage_outputs = getattr(node, "stage_outputs", None)
+        if stage_outputs is None:
+            stage_outputs = {}
+            node.stage_outputs = stage_outputs
+        stage_outputs["_modifiers_resolved"] = True
+        if getattr(node, "modifiers", None):
+            explicit.append(node.node_id)
+            continue
+        if not enabled:
+            disabled.append(node.node_id)
+            continue
+        style = str(stage_outputs.get("decomposition_hint", {}).get("style_hint", ""))
+        node.modifiers = get_modifiers_for_style(style) if style else []
+        if node.modifiers:
+            assigned.append(node.node_id)
+    report = {
+        "enabled": enabled, "assigned_node_ids": assigned,
+        "explicit_node_ids": explicit, "disabled_node_ids": disabled,
+    }
+    if hasattr(manifest, "record_event"):
+        manifest.record_event("modifiers_resolved", details=report)
+    return report

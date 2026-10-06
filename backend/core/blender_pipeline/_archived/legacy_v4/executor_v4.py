@@ -17,7 +17,7 @@ from enum import Enum
 logger = logging.getLogger(__name__)
 
 # Import centralized broadcast
-from .broadcast import broadcast_blender_trace
+from ...broadcast import broadcast_blender_trace
 
 
 class PipelineStatus(str, Enum):
@@ -83,7 +83,7 @@ async def execute_assembly_graph(
         Dict with ok, executed_steps, errors, generation_id
     """
     from core.assembly_spec import graph_to_blender_steps
-    from core.blender_pipeline.stage45_modifiers import Stage45ModifierIntent
+    from core.blender_pipeline._archived.legacy_stages.stage45_modifiers import Stage45ModifierIntent
     
     # Generate unique ID for this build generation
     gen_short = uuid.uuid4().hex[:8]

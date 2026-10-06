@@ -50,6 +50,7 @@ from .manifest import (
     ManifestNode,
     NodeState,
     CompletionStatus,
+    BuildOutcome,
     GeometrySpec,
     MaterialSpec,
     AttachmentSpec,
@@ -115,6 +116,20 @@ from .executor import (
     VerificationResult,
     build_and_verify_node,
 )
+
+# Frozen-plan transactional execution
+from .model_contract import ModelContract
+from .reference_brief import ReferenceBrief, ReferenceBriefGenerator
+from .transaction import (
+    ScenePlanError,
+    FrozenScenePlan,
+    SceneTransactionReceipt,
+    SceneTransactionCompiler,
+)
+from .scene_ir import ExecutableScenePlan, SceneObjectPlan, canonical_node_path
+from .readback import SceneReadbackVerifier
+from .repair import ScenePlanRepairer
+from .evaluation import EvalCase, BASELINE_CASES, V2EvaluationHarness
 
 # Instances
 from .instances import (
@@ -242,6 +257,22 @@ __all__ = [
     "ExecutionResult",
     "VerificationResult",
     "build_and_verify_node",
+    "ModelContract",
+    "ReferenceBrief",
+    "ReferenceBriefGenerator",
+    # Transaction
+    "ScenePlanError",
+    "FrozenScenePlan",
+    "SceneTransactionReceipt",
+    "SceneTransactionCompiler",
+    "ExecutableScenePlan",
+    "SceneObjectPlan",
+    "canonical_node_path",
+    "SceneReadbackVerifier",
+    "ScenePlanRepairer",
+    "EvalCase",
+    "BASELINE_CASES",
+    "V2EvaluationHarness",
     # Instances
     "InstanceManager",
     "InstancePlacement",

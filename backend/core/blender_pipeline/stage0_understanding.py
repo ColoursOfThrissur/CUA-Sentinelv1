@@ -10,8 +10,8 @@ The LLM may use web search here to find typical dimensions for the object catego
 import json
 import logging
 import re
-from dataclasses import dataclass
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from typing import Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,15 @@ class ObjectUnderstanding:
     rests_on_surface: bool
     style_tag: str
     scale_anchor: ScaleAnchor
+    # Optional identity evidence is deliberately separate from the category.
+    # A category ("desk fan") is not a product identification ("Vornado 630").
+    reference_target: Optional[str] = None
+    reference_target_confidence: float = 0.0
+    # Exact references can also identify a component (for example a named
+    # camera mounted on a drone).  They are evidence candidates, never a
+    # permission to invent a product identity for a generic noun.
+    reference_targets: List[dict] = field(default_factory=list)
+    scale_confidence: float = 0.45
     
     def to_dict(self) -> dict:
         return {
@@ -48,7 +57,11 @@ class ObjectUnderstanding:
             "scale_anchor_m": {
                 "overall_height_or_length": self.scale_anchor.overall_height_or_length_m,
                 "reasoning": self.scale_anchor.reasoning,
+                "confidence": self.scale_confidence,
             },
+            "reference_target": self.reference_target,
+            "reference_target_confidence": self.reference_target_confidence,
+            "reference_targets": self.reference_targets,
         }
 
 
@@ -61,8 +74,24 @@ Your task is to output a JSON object with these fields:
 - scale_anchor_m: An object with:
   - overall_height_or_length: The object's primary dimension in METERS (use real-world reference)
   - reasoning: Brief explanation of how you determined the scale
+- reference_target: an exact make/model or canonical named object ONLY when the
+  request unambiguously identifies one; otherwise null. Never infer a brand.
+- reference_target_confidence: 0..1. Use >= 0.85 only for an unambiguous target.
+- reference_targets: optional array of up to three explicitly named, unambiguous
+  model or component targets. Each item has name, scope ("model" or "component"),
+  context (short phrase describing how it relates to the object), and confidence.
+  Do not put generic words such as "camera" here unless the user named its exact
+  make/model. It is valid and usual to return an empty array.
+- scale_confidence: 0..1 confidence in the scale estimate. Generic categories
+  are normally <= 0.6; a stated measurement is 1.0.
 
-CRITICAL: The scale_anchor is the GROUND TRUTH for this build. All part dimensions will be validated as ratios against this value. Be accurate.
+CRITICAL: The scale_anchor is the provisional scale contract. All part dimensions
+will be validated as ratios against it. Do not claim an exact product scale
+without an exact reference target or a user-provided measurement.
+For objects with radially spreading arms, wings, blades, rails, or legs, use the
+largest overall span as the primary dimension—not the height of the central hub.
+For upright objects use height; for long objects use length. State which extent
+the anchor represents in the reasoning.
 
 Examples:
 - "A training dummy for martial arts" → height ~1.7m (human-height target)
@@ -202,6 +231,41 @@ class Stage0Understanding:
             logger.warning(f"Stage 0: Scale anchor {height_or_length}m seems very small (<1cm)")
         
         reasoning = scale_data.get("reasoning", "No reasoning provided")
+        def confidence(value: Any, default: float) -> float:
+            try:
+                return min(1.0, max(0.0, float(value)))
+            except (TypeError, ValueError):
+                return default
+        reference_target = data.get("reference_target")
+        if not isinstance(reference_target, str) or not reference_target.strip():
+            reference_target = None
+        reference_targets: List[dict] = []
+        raw_targets = data.get("reference_targets")
+        if isinstance(raw_targets, list):
+            for item in raw_targets[:3]:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name")
+                scope = item.get("scope")
+                if not isinstance(name, str) or not name.strip() or scope not in {"model", "component"}:
+                    continue
+                target_confidence = confidence(item.get("confidence"), 0.0)
+                # Web lookups must only be seeded by an explicit identity.
+                if target_confidence < 0.85:
+                    continue
+                reference_targets.append({
+                    "name": name.strip()[:160],
+                    "scope": scope,
+                    "context": str(item.get("context") or "").strip()[:200],
+                    "confidence": target_confidence,
+                })
+        if reference_target and confidence(data.get("reference_target_confidence"), 0.0) >= 0.85 and not any(
+            candidate["name"].casefold() == reference_target.casefold() for candidate in reference_targets
+        ):
+            reference_targets.insert(0, {
+                "name": reference_target[:160], "scope": "model", "context": "primary object",
+                "confidence": confidence(data.get("reference_target_confidence"), 0.0),
+            })
         
         return ObjectUnderstanding(
             category=category,
@@ -211,6 +275,10 @@ class Stage0Understanding:
                 overall_height_or_length_m=height_or_length,
                 reasoning=reasoning,
             ),
+            reference_target=reference_target,
+            reference_target_confidence=confidence(data.get("reference_target_confidence"), 0.0),
+            reference_targets=reference_targets,
+            scale_confidence=confidence(scale_data.get("confidence"), 0.45),
         )
 
 

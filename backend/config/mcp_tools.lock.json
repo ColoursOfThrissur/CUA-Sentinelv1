@@ -4,7 +4,7 @@
       "server": {
         "command": "uvx",
         "args": [
-          "blender-mcp"
+          "mcp-for-blender"
         ],
         "env_allowlist": [
           "SYSTEMROOT",
@@ -35,7 +35,7 @@
           "allowed_agents": []
         },
         "get_scene_info": {
-          "schema_sha256": "0e9170f19615bcc321f79c3f264228e7475e64611d170a6b3d9053b52732a19c",
+          "schema_sha256": "da93badde85b6eba8a4b6ac5b79d5e5938c08266f371cfba1df451068a75d28f",
           "description": "Query high-level metadata about the current Blender scene",
           "side_effect": "read",
           "risk_level": "L0",

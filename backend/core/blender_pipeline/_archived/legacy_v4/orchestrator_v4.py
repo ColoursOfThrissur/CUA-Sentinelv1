@@ -21,13 +21,13 @@ from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
 MAX_STAGE_RETRIES = 2
 
 from core.assembly_spec import AssemblyGraph
-from .broadcast import broadcast_blender_trace
+from ...broadcast import broadcast_blender_trace
 
-from .stage0_understanding import Stage0Understanding, ObjectUnderstanding, Stage0Error
-from .stage1_topology import Stage1Topology, PartTopology, Stage1Error
-from .stage2_dimensions import Stage2Dimensions, Stage2Output, Stage2Error
-from .stage3_semantics import Stage3Semantics, Stage3Output, Stage3Error
-from .stage4_resolver import Stage4Resolver, Stage4Error
+from ...stage0_understanding import Stage0Understanding, ObjectUnderstanding, Stage0Error
+from ..legacy_stages.stage1_topology import Stage1Topology, PartTopology, Stage1Error
+from ..legacy_stages.stage2_dimensions import Stage2Dimensions, Stage2Output, Stage2Error
+from ..legacy_stages.stage3_semantics import Stage3Semantics, Stage3Output, Stage3Error
+from ..legacy_stages.stage4_resolver import Stage4Resolver, Stage4Error
 
 logger = logging.getLogger(__name__)
 

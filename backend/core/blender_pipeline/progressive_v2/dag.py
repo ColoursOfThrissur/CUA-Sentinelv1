@@ -50,15 +50,28 @@ logger = logging.getLogger(__name__)
 
 class DependencyType(str, Enum):
     """Type of dependency relationship."""
-    # Implicit from hierarchy
-    PARENT_EXISTS = "parent_exists"      # Parent must exist (not necessarily verified)
+    # Hierarchy — execution order
+    # CHILD_MERGE: an assembly depends on each of its children being VERIFIED
+    # before it can merge.  Containment (A is inside B) does NOT mean A waits
+    # for B; it means B waits for A.  This is the inverse of the old
+    # PARENT_EXISTS edge and fixes the circular deadlock where a child waited
+    # for a parent to verify while the parent waited for the child to merge.
+    CHILD_MERGE = "child_merge"          # Assembly depends on child being VERIFIED
     SIBLING_ORDER = "sibling_order"      # Earlier siblings built first
-    
+
     # Explicit cross-assembly
     SOCKET_CONNECTION = "socket_connection"  # Connected via socket
     MATERIAL_SHARED = "material_shared"      # Shares material definition
     INSTANCE_OF = "instance_of"              # Instance depends on definition
-    
+
+    # Semantic edges (derived from socket vocabulary)
+    BOOLEAN_TARGET = "boolean_target"    # BOOLEAN_CUT node depends on its cut target (ROOT sibling)
+    INSET_TARGET = "inset_target"        # INSET node depends on its BOOLEAN_CUT sibling (hole must exist first)
+    SIBLING_ROOT_REF = "sibling_root_ref"  # Non-ROOT sibling depends on ROOT sibling (always assembly-local, never global)
+    CROSS_REFERENCE = "cross_reference"  # BRIDGE/STRUT/RELATIVE_TO/RADIAL_BRIDGE target
+    MISSING_TARGET = "missing_target"    # Cross-reference target label not found in manifest
+    INVALID_DEPENDENCY = "invalid_dependency"  # Dependency structurally invalid (e.g. self-bridge)
+
     # Build phase ordering
     PHASE_ORDER = "phase_order"          # Later phase depends on earlier
 
@@ -80,6 +93,33 @@ class Dependency:
         return (self.from_node == other.from_node and 
                 self.to_node == other.to_node and
                 self.dep_type == other.dep_type)
+
+
+@dataclass
+class DependencyBlock:
+    """Structured description of a single blocking dependency.
+
+    Replaces the old (blocker_id, reason_str) tuple so that the controller
+    and UI can inspect the exact reason without string parsing.
+
+    Fields:
+        blocker_id:    node_id of the node that is blocking progress.
+        blocker_state: current NodeState of the blocking node (or None if
+                       the node is absent from the manifest).
+        dep_type:      the DependencyType edge that is unsatisfied.
+        reason:        human-readable summary for logs / UI traces.
+    """
+    blocker_id: str
+    blocker_state: Optional[Any]   # NodeState | None
+    dep_type: DependencyType
+    reason: str
+
+    def __str__(self) -> str:
+        state_str = self.blocker_state.value if self.blocker_state else "missing"
+        return (
+            f"BLOCKED: requires '{self.blocker_id}' "
+            f"(State: {state_str}) for {self.dep_type.value}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -152,17 +192,23 @@ class DependencyDAG:
         for node_id in self.manifest.nodes:
             self._nodes.add(node_id)
         
-        # Add implicit hierarchy dependencies
+        # CHILD_MERGE edges: each assembly/model depends on its children being
+        # VERIFIED before it can merge.  This is the inverse of the old
+        # PARENT_EXISTS pattern and eliminates the circular deadlock where a
+        # child waited for a parent to verify while the parent waited for the
+        # child to merge.
         for node_id, node in self.manifest.nodes.items():
-            # Children depend on parent existing
-            if node.parent_id and node.parent_id in self.manifest.nodes:
-                self.add_dependency(
-                    from_node=node_id,
-                    to_node=node.parent_id,
-                    dep_type=DependencyType.PARENT_EXISTS,
-                    required=True,
-                )
-            
+            from .node_types import NodeKind as _NK
+            if node.kind in (_NK.ASSEMBLY, _NK.MODEL):
+                for child_id in node.children_ids:
+                    if child_id in self.manifest.nodes:
+                        self.add_dependency(
+                            from_node=node_id,
+                            to_node=child_id,
+                            dep_type=DependencyType.CHILD_MERGE,
+                            required=True,
+                        )
+
             # Instance depends on definition
             if node.instance_of and node.instance_of in self.manifest.nodes:
                 self.add_dependency(
@@ -171,7 +217,7 @@ class DependencyDAG:
                     dep_type=DependencyType.INSTANCE_OF,
                     required=True,
                 )
-            
+
             # Explicit dependencies from node
             for dep_id in node.dependency_ids:
                 if dep_id in self.manifest.nodes:
@@ -181,6 +227,76 @@ class DependencyDAG:
                         dep_type=DependencyType.SOCKET_CONNECTION,
                         required=True,
                     )
+
+            # ── Semantic edges from socket vocabulary ────────────────────
+            if not node.attachment:
+                continue
+            from .node_types import SocketType, CROSS_REFERENCE_SOCKETS
+            socket = node.attachment.socket_type
+            parent = self.manifest.nodes.get(node.parent_id) if node.parent_id else None
+
+            # BOOLEAN_TARGET: BOOLEAN_CUT depends on ROOT sibling (the body it cuts)
+            if socket == SocketType.BOOLEAN_CUT and parent:
+                for sib_id in parent.children_ids:
+                    if sib_id == node_id:
+                        continue
+                    sib = self.manifest.nodes.get(sib_id)
+                    if sib and sib.attachment and sib.attachment.socket_type == SocketType.ROOT:
+                        self.add_dependency(
+                            from_node=node_id,
+                            to_node=sib_id,
+                            dep_type=DependencyType.BOOLEAN_TARGET,
+                            required=True,
+                        )
+                        break
+
+            # INSET_TARGET: INSET depends on BOOLEAN_CUT sibling (hole must exist before panel fills it)
+            elif socket == SocketType.INSET and parent:
+                for sib_id in parent.children_ids:
+                    if sib_id == node_id:
+                        continue
+                    sib = self.manifest.nodes.get(sib_id)
+                    if sib and sib.attachment and sib.attachment.socket_type == SocketType.BOOLEAN_CUT:
+                        self.add_dependency(
+                            from_node=node_id,
+                            to_node=sib_id,
+                            dep_type=DependencyType.INSET_TARGET,
+                            required=True,
+                        )
+                        break
+
+            # SIBLING_ROOT_REF: non-ROOT siblings depend on ROOT sibling (assembly-local)
+            elif socket not in (SocketType.ROOT,) and socket not in CROSS_REFERENCE_SOCKETS and parent:
+                for sib_id in parent.children_ids:
+                    if sib_id == node_id:
+                        continue
+                    sib = self.manifest.nodes.get(sib_id)
+                    if sib and sib.attachment and sib.attachment.socket_type == SocketType.ROOT:
+                        self.add_dependency(
+                            from_node=node_id,
+                            to_node=sib_id,
+                            dep_type=DependencyType.SIBLING_ROOT_REF,
+                            required=True,
+                        )
+                        break
+
+            # CROSS_REFERENCE: BRIDGE/STRUT/RELATIVE_TO/RADIAL_BRIDGE depend on named target
+            elif socket in CROSS_REFERENCE_SOCKETS:
+                hint = node.stage_outputs.get("decomposition_hint", {})
+                target_label = (
+                    hint.get("connects_to") or hint.get("relative_to")
+                    or (node.attachment.connects_to if hasattr(node.attachment, "connects_to") else None)
+                    or (node.attachment.relative_to if hasattr(node.attachment, "relative_to") else None)
+                )
+                if target_label:
+                    target = self.manifest.get_node_by_label(target_label)
+                    if target and target.node_id in self.manifest.nodes:
+                        self.add_dependency(
+                            from_node=node_id,
+                            to_node=target.node_id,
+                            dep_type=DependencyType.CROSS_REFERENCE,
+                            required=True,
+                        )
     
     @classmethod
     def from_manifest(cls, manifest: BuildManifest) -> DependencyDAG:
@@ -550,31 +666,120 @@ class DependencyDAG:
         
         return self.get_ready_nodes(completed, failed, is_ready_state)
     
-    def get_blocked_by(self, node_id: str) -> List[Tuple[str, str]]:
-        """Get list of (blocker_id, reason) for what's blocking a node."""
+    def get_missing_targets(self) -> List[Tuple[str, str]]:
+        """Return (node_id, target_label) pairs where a cross-reference target
+        label was recorded in decomposition_hint but no matching node exists.
+
+        Used for pre-build validation: if any entry is returned the manifest
+        has dangling references that Stage 4 pass-2 will fail on.
+        """
         if not self.manifest:
-            return [(dep, "unknown") for dep in self._forward.get(node_id, [])]
-        
-        blockers = []
+            return []
+        from .node_types import CROSS_REFERENCE_SOCKETS
+        missing = []
+        for node_id, node in self.manifest.nodes.items():
+            if not node.attachment:
+                continue
+            if node.attachment.socket_type not in CROSS_REFERENCE_SOCKETS:
+                continue
+            hint = node.stage_outputs.get("decomposition_hint", {})
+            target_label = (
+                hint.get("connects_to") or hint.get("relative_to")
+                or (node.attachment.connects_to if hasattr(node.attachment, "connects_to") else None)
+                or (node.attachment.relative_to if hasattr(node.attachment, "relative_to") else None)
+            )
+            if not target_label:
+                continue
+            if self.manifest.get_node_by_label(target_label) is None:
+                missing.append((node_id, target_label))
+        return missing
+
+    def get_blocked_by(self, node_id: str) -> List[DependencyBlock]:
+        """Get structured DependencyBlock list for what's blocking a node.
+
+        CHILD_MERGE and SIBLING_ORDER edges only require the dependency to
+        be non-failed — they do NOT require VERIFIED.  All other edge types
+        require VERIFIED before the dependent can proceed.
+
+        Returns a list of DependencyBlock dataclasses instead of raw
+        (id, reason) tuples so callers can inspect dep_type without parsing.
+        """
+        if not self.manifest:
+            return [
+                DependencyBlock(
+                    blocker_id=dep,
+                    blocker_state=None,
+                    dep_type=DependencyType.SOCKET_CONNECTION,
+                    reason="unknown (no manifest)",
+                )
+                for dep in self._forward.get(node_id, [])
+            ]
+
+        # Edge types that only need the dependency to be non-failed (not VERIFIED)
+        _EXISTENCE_ONLY = {DependencyType.CHILD_MERGE, DependencyType.SIBLING_ORDER}
+
+        blockers: List[DependencyBlock] = []
         for dep_id in self._forward.get(node_id, []):
             dep_node = self.manifest.nodes.get(dep_id)
             if not dep_node:
-                blockers.append((dep_id, "missing"))
+                blockers.append(DependencyBlock(
+                    blocker_id=dep_id,
+                    blocker_state=None,
+                    dep_type=DependencyType.MISSING_TARGET,
+                    reason="blocker node missing from manifest",
+                ))
                 continue
-            
+
+            dep_info = self._dependencies.get((node_id, dep_id))
+            dep_type = dep_info.dep_type if dep_info else DependencyType.SOCKET_CONNECTION
+
+            if dep_type in _EXISTENCE_ONLY:
+                # Only block if the dependency has permanently failed
+                if dep_node.state == NodeState.FAILED and dep_info and dep_info.required:
+                    if not dep_node.can_retry():
+                        blockers.append(DependencyBlock(
+                            blocker_id=dep_id,
+                            blocker_state=dep_node.state,
+                            dep_type=dep_type,
+                            reason=f"permanently failed: {dep_node.error_message or 'unknown'}",
+                        ))
+                elif dep_node.state == NodeState.SKIPPED and dep_info and dep_info.required:
+                    blockers.append(DependencyBlock(
+                        blocker_id=dep_id,
+                        blocker_state=dep_node.state,
+                        dep_type=dep_type,
+                        reason="skipped (required)",
+                    ))
+                # Any other state (PLANNED, READY, BUILDING, VERIFIED, …) is fine
+                continue
+
+            # All other edge types require VERIFIED
             if dep_node.state == NodeState.VERIFIED:
                 continue  # Not blocking
-            
+
             if dep_node.state == NodeState.FAILED:
-                blockers.append((dep_id, f"failed: {dep_node.error_message or 'unknown'}"))
+                blockers.append(DependencyBlock(
+                    blocker_id=dep_id,
+                    blocker_state=dep_node.state,
+                    dep_type=dep_type,
+                    reason=f"failed: {dep_node.error_message or 'unknown'}",
+                ))
             elif dep_node.state == NodeState.SKIPPED:
-                dep_info = self._dependencies.get((node_id, dep_id))
                 if dep_info and dep_info.required:
-                    blockers.append((dep_id, "skipped (required)"))
-                # Soft dependency skipped is OK
+                    blockers.append(DependencyBlock(
+                        blocker_id=dep_id,
+                        blocker_state=dep_node.state,
+                        dep_type=dep_type,
+                        reason="skipped (required)",
+                    ))
             else:
-                blockers.append((dep_id, f"state: {dep_node.state.value}"))
-        
+                blockers.append(DependencyBlock(
+                    blocker_id=dep_id,
+                    blocker_state=dep_node.state,
+                    dep_type=dep_type,
+                    reason=f"state: {dep_node.state.value}",
+                ))
+
         return blockers
     
     def is_blocked(self, node_id: str) -> bool:

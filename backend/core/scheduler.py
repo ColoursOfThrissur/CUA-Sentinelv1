@@ -134,6 +134,29 @@ class Scheduler:
                 await broadcast_task_update(claim.task_id, "CANCELLED")
                 return
 
+            from core.blender_pipeline.progressive_v2.outcome_policy import TaskDisposition, task_disposition
+            build_status = result.get("completion_status", result.get("status")) if isinstance(result, dict) else None
+            disposition = task_disposition(build_status)
+            if isinstance(result, dict) and (
+                build_status is not None and disposition is TaskDisposition.NOT_DONE
+            ):
+                error = str(result.get("error") or "Blender build failed")
+                self.queue.release_task(claim.task_id, claim.lease_id, "FAILED", result_payload=result, error=error)
+                await broadcast_task_update(claim.task_id, "FAILED", result)
+                return
+
+            if isinstance(result, dict) and disposition is TaskDisposition.DONE_WITH_WARNINGS:
+                outcome = result.get("outcome") or {}
+                defects = outcome.get("defects") if isinstance(outcome, dict) else []
+                warning_text = result.get("errors") or [
+                    str(defect.get("message", defect)) for defect in (defects or [])
+                ]
+                result = {
+                    **result,
+                    "task_outcome": TaskDisposition.DONE_WITH_WARNINGS.value,
+                    "warnings": "; ".join(map(str, warning_text)),
+                }
+
             self.queue.release_task(claim.task_id, claim.lease_id, "COMPLETED", result_payload=result)
             await broadcast_task_update(claim.task_id, "COMPLETED", result)
 

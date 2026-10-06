@@ -344,8 +344,11 @@ async def startup(app: FastAPI) -> None:
     app.state.background_tasks.start("cache-prune", _cache_prune_loop())
     app.state.background_tasks.start("chroma-prune", _chroma_prune_loop())
 
-    # Eval harness: runs once at startup (after a short delay) then weekly
-    app.state.background_tasks.start("eval-harness", _eval_harness_loop())
+        # Eval harness: runs once at startup (after a short delay) then weekly
+    if _is_service_enabled("eval_harness"):
+        app.state.background_tasks.start("eval-harness", _eval_harness_loop())
+    else:
+        logger.info("Background service eval_harness is disabled -- skipping.")
 
     logger.info("CUA-Sentinel fully started.")
 

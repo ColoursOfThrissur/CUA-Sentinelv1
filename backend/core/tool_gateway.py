@@ -159,8 +159,8 @@ class ToolGateway:
             cls._TOOL_HANDLERS[tool_name] = _make_handler(param_cls, template)
 
         async def _build_progressive_handler(**kwargs):
-            """v5 Progressive Pipeline (progressive_v2) - the ONLY build path."""
-            from core.blender_pipeline.progressive_v2 import run_progressive_build, HierarchyLimits
+            """Primary V2 Blender build; V3 remains experimental."""
+            from core.blender_pipeline.progressive_v2 import HierarchyLimits, run_progressive_build
             from core.model_manager import ModelManager
             
             mcp_mgr = cls._active_mcp_manager or MCPManager.get_instance() or MCPManager()
@@ -182,11 +182,15 @@ class ToolGateway:
                 model_manager=mdl_mgr,
                 task_id=task_id,
                 mcp_manager=mcp_mgr,
-                limits=HierarchyLimits(max_depth=3, max_children=10, max_total_nodes=30),
+                limits=HierarchyLimits(max_depth=60, max_children=200, max_total_nodes=2000),
             )
+            from .blender_pipeline.progressive_v2.outcome_policy import TaskDisposition, task_disposition
+            disposition = task_disposition(res.completion_status)
             return {
-                "ok": res.success,
+                "ok": disposition is not TaskDisposition.NOT_DONE,
                 "status": res.completion_status.value,
+                "completion_status": res.completion_status.value,
+                "task_outcome": disposition.value,
                 "total_nodes": res.total_nodes,
                 "verified_nodes": res.verified_nodes,
                 "failed_nodes": res.failed_nodes,

@@ -21,6 +21,7 @@ Blueprint references: §6 (materials in manifest).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any, Dict, List, Optional
 
 
@@ -60,6 +61,14 @@ class MaterialPreset:
     # Sheen (for fabric)
     sheen: float = 0.0
     sheen_tint: float = 0.5
+
+    # Anisotropy (for brushed metal)
+    anisotropy: float = 0.0
+    anisotropy_rotation: float = 0.0
+
+    # Procedural Shader Texture (Wood grain, brushed metal, leather grain, marble vein, concrete noise, etc.)
+    procedural_texture: Optional[str] = None  # "wood", "brushed_metal", "leather", "marble", "noise", "hammered"
+    procedural_params: Dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize for JSON."""
@@ -78,7 +87,12 @@ class MaterialPreset:
             "clearcoat_roughness": self.clearcoat_roughness,
             "sheen": self.sheen,
             "sheen_tint": self.sheen_tint,
+            "anisotropy": self.anisotropy,
+            "anisotropy_rotation": self.anisotropy_rotation,
         }
+        if self.procedural_texture:
+            d["procedural_texture"] = self.procedural_texture
+            d["procedural_params"] = self.procedural_params
         if self.emission_color:
             d["emission_color"] = self.emission_color
             d["emission_strength"] = self.emission_strength
@@ -104,12 +118,18 @@ MATERIAL_PRESETS: Dict[str, MaterialPreset] = {
         base_color=[0.65, 0.65, 0.67, 1.0],
         metallic=1.0,
         roughness=0.35,
+        anisotropy=0.8,
+        procedural_texture="brushed_metal",
+        procedural_params={"scale": 35.0, "stretch": 60.0, "strength": 0.04},
     ),
     "brushed_aluminum": MaterialPreset(
         name="brushed_aluminum",
         base_color=[0.85, 0.85, 0.87, 1.0],
         metallic=1.0,
         roughness=0.3,
+        anisotropy=0.75,
+        procedural_texture="brushed_metal",
+        procedural_params={"scale": 40.0, "stretch": 70.0, "strength": 0.035},
     ),
     "polished_aluminum": MaterialPreset(
         name="polished_aluminum",
@@ -206,30 +226,40 @@ MATERIAL_PRESETS: Dict[str, MaterialPreset] = {
         base_color=[0.76, 0.6, 0.42, 1.0],
         metallic=0.0,
         roughness=0.6,
+        procedural_texture="wood",
+        procedural_params={"scale": 18.0, "distortion": 3.5, "detail": 3.0, "strength": 0.12},
     ),
     "wood_dark": MaterialPreset(
         name="wood_dark",
         base_color=[0.35, 0.22, 0.12, 1.0],
         metallic=0.0,
         roughness=0.55,
+        procedural_texture="wood",
+        procedural_params={"scale": 16.0, "distortion": 4.0, "detail": 3.0, "strength": 0.14},
     ),
     "wood_oak": MaterialPreset(
         name="wood_oak",
         base_color=[0.65, 0.45, 0.25, 1.0],
         metallic=0.0,
         roughness=0.5,
+        procedural_texture="wood",
+        procedural_params={"scale": 15.0, "distortion": 3.8, "detail": 3.0, "strength": 0.15},
     ),
     "wood_walnut": MaterialPreset(
         name="wood_walnut",
         base_color=[0.4, 0.28, 0.18, 1.0],
         metallic=0.0,
         roughness=0.45,
+        procedural_texture="wood",
+        procedural_params={"scale": 14.0, "distortion": 4.2, "detail": 3.2, "strength": 0.15},
     ),
     "wood_painted_white": MaterialPreset(
         name="wood_painted_white",
         base_color=[0.92, 0.9, 0.88, 1.0],
         metallic=0.0,
         roughness=0.4,
+        procedural_texture="wood",
+        procedural_params={"scale": 20.0, "distortion": 2.5, "detail": 2.0, "strength": 0.05},
     ),
     "wood_varnished": MaterialPreset(
         name="wood_varnished",
@@ -237,40 +267,46 @@ MATERIAL_PRESETS: Dict[str, MaterialPreset] = {
         metallic=0.0,
         roughness=0.2,
         clearcoat=0.3,
+        procedural_texture="wood",
+        procedural_params={"scale": 15.0, "distortion": 3.5, "detail": 3.0, "strength": 0.08},
     ),
     
     # ── Glass & Transparent ───────────────────────────────────────────────
     "glass_clear": MaterialPreset(
         name="glass_clear",
-        base_color=[1.0, 1.0, 1.0, 1.0],
+        base_color=[0.8, 0.95, 1.0, 0.05],
         metallic=0.0,
         roughness=0.0,
         transmission=1.0,
         ior=1.45,
+        alpha=0.05,
     ),
     "glass_frosted": MaterialPreset(
         name="glass_frosted",
-        base_color=[0.95, 0.95, 0.97, 1.0],
+        base_color=[0.9, 0.92, 0.95, 0.15],
         metallic=0.0,
-        roughness=0.3,
+        roughness=0.25,
         transmission=0.9,
         ior=1.45,
+        alpha=0.15,
     ),
     "glass_tinted": MaterialPreset(
         name="glass_tinted",
-        base_color=[0.2, 0.3, 0.35, 1.0],
+        base_color=[0.15, 0.25, 0.3, 0.1],
         metallic=0.0,
         roughness=0.0,
         transmission=0.85,
         ior=1.45,
+        alpha=0.1,
     ),
     "acrylic": MaterialPreset(
         name="acrylic",
-        base_color=[0.98, 0.98, 1.0, 1.0],
+        base_color=[0.95, 0.97, 1.0, 0.08],
         metallic=0.0,
         roughness=0.05,
         transmission=0.95,
         ior=1.49,
+        alpha=0.08,
     ),
     
     # ── Fabric ────────────────────────────────────────────────────────────
@@ -295,6 +331,8 @@ MATERIAL_PRESETS: Dict[str, MaterialPreset] = {
         metallic=0.0,
         roughness=0.6,
         specular=0.3,
+        procedural_texture="leather",
+        procedural_params={"scale": 120.0, "strength": 0.12},
     ),
     "leather_black": MaterialPreset(
         name="leather_black",
@@ -302,6 +340,8 @@ MATERIAL_PRESETS: Dict[str, MaterialPreset] = {
         metallic=0.0,
         roughness=0.55,
         specular=0.35,
+        procedural_texture="leather",
+        procedural_params={"scale": 130.0, "strength": 0.12},
     ),
     
     # ── Stone & Concrete ──────────────────────────────────────────────────
@@ -310,6 +350,8 @@ MATERIAL_PRESETS: Dict[str, MaterialPreset] = {
         base_color=[0.55, 0.53, 0.5, 1.0],
         metallic=0.0,
         roughness=0.85,
+        procedural_texture="noise",
+        procedural_params={"scale": 30.0, "detail": 4.0, "roughness": 0.7, "strength": 0.18},
     ),
     "marble_white": MaterialPreset(
         name="marble_white",
@@ -317,12 +359,16 @@ MATERIAL_PRESETS: Dict[str, MaterialPreset] = {
         metallic=0.0,
         roughness=0.2,
         subsurface=0.05,
+        procedural_texture="marble",
+        procedural_params={"scale": 5.0, "distortion": 8.0, "detail": 3.0, "strength": 0.08},
     ),
     "granite": MaterialPreset(
         name="granite",
         base_color=[0.4, 0.38, 0.35, 1.0],
         metallic=0.0,
         roughness=0.4,
+        procedural_texture="noise",
+        procedural_params={"scale": 45.0, "detail": 5.0, "roughness": 0.8, "strength": 0.15},
     ),
     
     # ── Ceramic & Porcelain ───────────────────────────────────────────────
@@ -451,6 +497,19 @@ def get_material_for_description(description: str) -> MaterialPreset:
     Maps descriptions like "shiny metal", "wooden", "plastic" to presets.
     """
     desc_lower = description.lower()
+    words = set(re.findall(r"[a-z]+", desc_lower))
+
+    # An LED is a functional material role.  Resolve it before incidental
+    # words such as "metal" in nearby prompt context, while keeping glass
+    # components glass unless they explicitly say LED.
+    if {"led", "leds", "glow"} & words:
+        if "red" in words:
+            return MATERIAL_PRESETS["led_red"]
+        if "green" in words:
+            return MATERIAL_PRESETS["led_green"]
+        if "blue" in words:
+            return MATERIAL_PRESETS["led_blue"]
+        return MATERIAL_PRESETS["led_white"]
     
     # Metals
     if "chrome" in desc_lower or "mirror" in desc_lower:
@@ -545,14 +604,6 @@ def get_material_for_description(description: str) -> MaterialPreset:
         return MATERIAL_PRESETS["porcelain"]
     
     # Emissive
-    if "led" in desc_lower or "glow" in desc_lower or "light" in desc_lower:
-        if "red" in desc_lower:
-            return MATERIAL_PRESETS["led_red"]
-        if "green" in desc_lower:
-            return MATERIAL_PRESETS["led_green"]
-        if "blue" in desc_lower:
-            return MATERIAL_PRESETS["led_blue"]
-        return MATERIAL_PRESETS["led_white"]
     if "screen" in desc_lower or "display" in desc_lower:
         return MATERIAL_PRESETS["screen"]
     
@@ -567,6 +618,12 @@ def get_material_for_description(description: str) -> MaterialPreset:
         return MATERIAL_PRESETS["car_paint_metallic"]
     
     # Color-based fallbacks
+    # A finish alone is still meaningful intent (for example glossy
+    # propeller blades).  Do not fall through to a generic rough surface.
+    if "glossy" in desc_lower:
+        return MATERIAL_PRESETS["glossy_plastic"]
+    if "matte" in desc_lower:
+        return MATERIAL_PRESETS["matte_plastic"]
     if "black" in desc_lower:
         return MATERIAL_PRESETS["glossy_plastic_black"]
     if "white" in desc_lower:
@@ -579,3 +636,33 @@ def get_material_for_description(description: str) -> MaterialPreset:
 def list_preset_names() -> List[str]:
     """Return list of all available preset names."""
     return list(MATERIAL_PRESETS.keys())
+
+
+def ensure_manifest_materials(manifest: Any) -> Dict[str, Any]:
+    """Resolve a concrete PBR material for every physical part before freeze.
+
+    Material inference previously happened inside the executor, after the plan
+    fingerprint was created.  That made material intent invisible to audits
+    and impossible to verify by readback.  This deterministic pass makes it a
+    declared part of the executable scene contract.
+    """
+    from .manifest import MaterialSpec
+    from .node_types import NodeKind
+
+    assigned: List[str] = []
+    existing: List[str] = []
+    for node in manifest.nodes.values():
+        if node.kind not in (NodeKind.PART, NodeKind.DEFINITION):
+            continue
+        if getattr(node, "material", None) is not None:
+            existing.append(node.node_id)
+            continue
+        hints = getattr(node, "stage_outputs", {}).get("decomposition_hint", {})
+        description = str(hints.get("material_hint") or node.label)
+        preset = get_material_for_description(description)
+        node.material = MaterialSpec.from_preset(preset.name)
+        assigned.append(node.node_id)
+    report = {"assigned_node_ids": assigned, "existing_node_ids": existing, "complete": True}
+    if hasattr(manifest, "record_event"):
+        manifest.record_event("materials_resolved", details=report)
+    return report

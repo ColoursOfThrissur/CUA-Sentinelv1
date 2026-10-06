@@ -97,6 +97,7 @@ class SpatialVerifier:
         objects: List[str],
         level: VerificationLevel = VerificationLevel.STANDARD,
         allowed_overlaps: Optional[Set[Tuple[str, str]]] = None,
+        allowed_disconnected: Optional[Set[str]] = None,
         task_id: str = "",
     ) -> SpatialVerificationResult:
         """Verify spatial relationships in an assembly.
@@ -108,6 +109,7 @@ class SpatialVerifier:
                              (e.g., boolean targets)
         """
         allowed_overlaps = allowed_overlaps or set()
+        allowed_disconnected = allowed_disconnected or set()
         issues = []
         warnings = []
         errors = []
@@ -152,12 +154,15 @@ class SpatialVerifier:
             floating_result = await self._check_floating_objects(objects, task_id)
             
             for obj in floating_result.get("floating", []):
+                if obj in allowed_disconnected:
+                    warnings.append(f"Declared disconnected object: {obj}")
+                    continue
                 issues.append(SpatialIssue(
                     issue_type=SpatialIssueType.FLOATING,
                     object_a=obj,
-                    severity="warning",
+                    severity="error",
                 ))
-                warnings.append(f"Floating object: {obj}")
+                errors.append(f"Floating object: {obj}")
         
         # PARANOID: check mesh validity
         if level == VerificationLevel.PARANOID:
@@ -392,7 +397,7 @@ else:
     bm.from_mesh(obj.data)
     
     # Check for degenerate faces
-    degen = sum(1 for f in bm.faces if f.calc_area() < 1e-8)
+    degen = sum(1 for f in bm.faces if f.calc_area() < 1e-12)
     if degen > 0:
         issues.append(f"{{degen}} degenerate faces")
     

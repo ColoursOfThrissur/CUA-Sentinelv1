@@ -1,0 +1,38 @@
+INFO:core.blender_pipeline.progressive_v2.controller:[test_table_live] Build loop starting with 7 nodes:
+INFO:core.blender_pipeline.progressive_v2.controller:  [model] simple_table: state=planned, socket=ROOT, ROOT
+INFO:core.blender_pipeline.progressive_v2.controller:  [assembly] table_assembly: state=ready, socket=ROOT, parent=simple_table(planned)
+INFO:core.blender_pipeline.progressive_v2.controller:  [part] tabletop: state=planned, socket=ROOT, parent=table_assembly(ready)
+INFO:core.blender_pipeline.progressive_v2.controller:  [part] leg_fl: state=planned, socket=TOP_CENTER, parent=table_assembly(ready)
+INFO:core.blender_pipeline.progressive_v2.controller:  [part] leg_fr: state=planned, socket=TOP_CENTER, parent=table_assembly(ready)
+INFO:core.blender_pipeline.progressive_v2.controller:  [part] leg_bl: state=planned, socket=TOP_CENTER, parent=table_assembly(ready)
+INFO:core.blender_pipeline.progressive_v2.controller:  [part] leg_br: state=planned, socket=TOP_CENTER, parent=table_assembly(ready)
+DEBUG:core.blender_pipeline.progressive_v2.controller:[test_table_live] Phase 3 propagate tabletop: local_pos=[0.0, 0.0, 0.375], parent_world=found, world_pos=[0.0, 0.0, 0.375]
+DEBUG:core.blender_pipeline.progressive_v2.controller:[test_table_live] Phase 3 propagate leg_bl: local_pos=[-0.35, 0.25, 0.175], parent_world=found, world_pos=[-0.35, 0.25, 0.175]
+DEBUG:core.blender_pipeline.progressive_v2.controller:[test_table_live] Phase 3 propagate leg_br: local_pos=[0.35, 0.25, 0.175], parent_world=found, world_pos=[0.35, 0.25, 0.175]
+DEBUG:core.blender_pipeline.progressive_v2.controller:[test_table_live] Phase 3 propagate leg_fl: local_pos=[-0.35, -0.25, 0.175], parent_world=found, world_pos=[-0.35, -0.25, 0.175]
+DEBUG:core.blender_pipeline.progressive_v2.controller:[test_table_live] Phase 3 propagate leg_fr: local_pos=[0.35, -0.25, 0.175], parent_world=found, world_pos=[0.35, -0.25, 0.175]
+DEBUG:core.blender_pipeline.progressive_v2.controller:Phase: verifying - Verifying: tabletop
+INFO:core.blender_pipeline.progressive_v2.controller:[test_table_live] Verified: tabletop
+DEBUG:core.blender_pipeline.progressive_v2.controller:Phase: verifying - Verifying: leg_bl
+INFO:core.blender_pipeline.progressive_v2.controller:[test_table_live] Verified: leg_bl
+DEBUG:core.blender_pipeline.progressive_v2.controller:Phase: verifying - Verifying: leg_br
+INFO:core.blender_pipeline.progressive_v2.controller:[test_table_live] Verified: leg_br
+DEBUG:core.blender_pipeline.progressive_v2.controller:Phase: verifying - Verifying: leg_fl
+INFO:core.blender_pipeline.progressive_v2.controller:[test_table_live] Verified: leg_fl
+DEBUG:core.blender_pipeline.progressive_v2.controller:Phase: verifying - Verifying: leg_fr
+INFO:core.blender_pipeline.progressive_v2.controller:[test_table_live] Verified: leg_fr
+DEBUG:core.blender_pipeline.progressive_v2.controller:[test_table_live] Assembly table_assembly local_transform: pos=[0.0, 0.0, 0.0]
+DEBUG:core.blender_pipeline.progressive_v2.controller:[test_table_live] Phase 3 propagate table_assembly: local_pos=[0.0, 0.0, 0.0], parent_world=None, world_pos=[0.0, 0.0, 0.0]
+DEBUG:core.blender_pipeline.progressive_v2.controller:Phase: merging - Merging: table_assembly
+DEBUG:core.blender_pipeline.progressive_v2.controller:Phase: verifying - Verifying assembly: table_assembly
+INFO:core.blender_pipeline.progressive_v2.controller:[test_table_live] Assembly verified: table_assembly
+DEBUG:core.blender_pipeline.progressive_v2.controller:[test_table_live] Assembly simple_table local_transform: pos=[0.0, 0.0, 0.0]
+DEBUG:core.blender_pipeline.progressive_v2.controller:[test_table_live] Phase 3 propagate simple_table: local_pos=[0.0, 0.0, 0.0], parent_world=None, world_pos=[0.0, 0.0, 0.0]
+DEBUG:core.blender_pipeline.progressive_v2.controller:Phase: merging - Merging: simple_table
+DEBUG:core.blender_pipeline.progressive_v2.controller:Phase: verifying - Verifying assembly: simple_table
+INFO:core.blender_pipeline.progressive_v2.controller:[test_table_live] Assembly verified: simple_table
+INFO:core.blender_pipeline.progressive_v2.controller:[test_table_live] Root verified - build complete!
+DEBUG:core.blender_pipeline.progressive_v2.controller:Phase: complete - Build complete
+WARNING:core.blender_pipeline.progressive_v2.controller:[test_table_live] Hierarchy establishment error: Blender output did not contain structured Sentinel payload.
+Head: Error executing code: Communication error with Blender: {"exception_type": "TypeError", "message": "unhashable type: 'dict'", "traceback": "Traceback (most recent call last):\n  File \"C:\\Users\\deri
+Tail: 

@@ -8,6 +8,26 @@ from core.gmail_triage import GmailTriageEngine
 logger = logging.getLogger(__name__)
 
 
+def _is_service_enabled(service_id: str) -> bool:
+    """Check user preference for a background service. Default: disabled."""
+    try:
+        from db.connections import get_knowledge_db
+        import json
+        conn = get_knowledge_db()
+        try:
+            row = conn.execute(
+                "SELECT pref_value FROM user_preferences WHERE pref_key = 'background_services_enabled'"
+            ).fetchone()
+            if row:
+                cfg = json.loads(row["pref_value"])
+                return bool(cfg.get(service_id, False))
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return False
+
+
 class CronEngine:
     """
     24/7 Autonomous Cron Scheduler Engine.
@@ -56,70 +76,74 @@ class CronEngine:
 
                 # Task 1: Financial Market Watchdog (Every 30 mins / 1800 sec)
                 if now_timestamp - last_finance_tick >= 1800:
-                    logger.info("Cron: Running Financial Market Watchdog check...")
-                    alerts = await self.finance_tools.evaluate_portfolio_alerts()
-                    if alerts:
-                        logger.info(f"Cron: Dispatched {len(alerts)} price shift alerts.")
+                    if _is_service_enabled("portfolio_watchdog"):
+                        logger.info("Cron: Running Financial Market Watchdog check...")
+                        alerts = await self.finance_tools.evaluate_portfolio_alerts()
+                        if alerts:
+                            logger.info(f"Cron: Dispatched {len(alerts)} price shift alerts.")
                     last_finance_tick = now_timestamp
 
-                # Task 2: Smart Gmail Inbox Triage (Every 20 mins / 1200 sec, LLM-free regex/IMAP)
+                # Task 2: Smart Gmail Inbox Triage (Every 20 mins / 1200 sec)
                 if now_timestamp - last_gmail_tick >= 1200:
-                    logger.info("Cron: Running Smart Gmail Inbox Triage...")
-                    try:
-                        await asyncio.to_thread(self.gmail_triage.scan_inbox)
-                    except Exception as gm_err:
-                        logger.error(f"Cron: Gmail triage error: {gm_err}")
+                    if _is_service_enabled("gmail_triage"):
+                        logger.info("Cron: Running Smart Gmail Inbox Triage...")
+                        try:
+                            await asyncio.to_thread(self.gmail_triage.scan_inbox)
+                        except Exception as gm_err:
+                            logger.error(f"Cron: Gmail triage error: {gm_err}")
                     last_gmail_tick = now_timestamp
 
                 # Task 3: Autonomous Project Health Audit (Every 2 Hours / 7200 sec)
                 if now_timestamp - last_health_daemon_tick >= 7200:
-                    logger.info("Cron: Running 24/7 Autonomous Project Health Daemon audit...")
-                    try:
-                        from core.project_health_daemon import project_health_daemon
-                        if self.task_queue:
-                            project_health_daemon.task_queue = self.task_queue
-                        await project_health_daemon.audit_all_projects(force_run=False)
-                    except Exception as hd_err:
-                        logger.error(f"Cron: Error running Project Health Daemon audit: {hd_err}")
+                    if _is_service_enabled("project_health_daemon"):
+                        logger.info("Cron: Running 24/7 Autonomous Project Health Daemon audit...")
+                        try:
+                            from core.project_health_daemon import project_health_daemon
+                            if self.task_queue:
+                                project_health_daemon.task_queue = self.task_queue
+                            await project_health_daemon.audit_all_projects(force_run=False)
+                        except Exception as hd_err:
+                            logger.error(f"Cron: Error running Project Health Daemon audit: {hd_err}")
                     last_health_daemon_tick = now_timestamp
 
                 # Task 4: Daily Industry Briefing (At 06:00 UTC if not run today)
                 if now.hour == 6 and last_daily_tick_date != today_str:
-                    logger.info("Cron: Dispatching Daily Morning Sector Briefing...")
-                    await self.alert_manager.dispatch_alert(
-                        title="Morning Sector Briefing",
-                        message="24/7 Autonomous Industry Radar digest updated. Check Dashboard for full synthesis.",
-                        severity="INFO",
-                        category="DIGEST",
-                    )
+                    if _is_service_enabled("daily_briefing"):
+                        logger.info("Cron: Dispatching Daily Morning Sector Briefing...")
+                        await self.alert_manager.dispatch_alert(
+                            title="Morning Sector Briefing",
+                            message="24/7 Autonomous Industry Radar digest updated. Check Dashboard for full synthesis.",
+                            severity="INFO",
+                            category="DIGEST",
+                        )
                     last_daily_tick_date = today_str
 
                 # Task 5: Daily Off-Hours ImprovementScout Research Cycle (At 03:00 UTC)
                 if now.hour == 3 and last_research_tick_date != today_str:
-                    logger.info("Cron: Enqueuing Daily ImprovementScout Research Cycles...")
-                    try:
-                        from core.projects_manager import projects_manager
-                        projects = projects_manager.list_projects()
-                        for p in projects:
-                            if self.task_queue:
-                                self.task_queue.enqueue(
-                                    workflow_type="RESEARCH_CYCLE",
-                                    title=f"Improvement Scout: {p.get('project_name')}",
-                                    priority=3,
-                                    input_payload={
-                                        "project_id": p.get("project_id"),
-                                        "project_name": p.get("project_name"),
-                                        "target_path": p.get("target_path"),
-                                    },
-                                    description=f"Autonomous research cycle for {p.get('project_name')}",
-                                )
-                        last_research_tick_date = today_str
-                    except Exception as scout_err:
-                        logger.error(f"Cron: Error enqueuing ImprovementScout cycle: {scout_err}")
+                    if _is_service_enabled("improvement_scout"):
+                        logger.info("Cron: Enqueuing Daily ImprovementScout Research Cycles...")
+                        try:
+                            from core.projects_manager import projects_manager
+                            projects = projects_manager.list_projects()
+                            for p in projects:
+                                if self.task_queue:
+                                    self.task_queue.enqueue(
+                                        workflow_type="RESEARCH_CYCLE",
+                                        title=f"Improvement Scout: {p.get('project_name')}",
+                                        priority=3,
+                                        input_payload={
+                                            "project_id": p.get("project_id"),
+                                            "project_name": p.get("project_name"),
+                                            "target_path": p.get("target_path"),
+                                        },
+                                        description=f"Autonomous research cycle for {p.get('project_name')}",
+                                    )
+                        except Exception as scout_err:
+                            logger.error(f"Cron: Error enqueuing ImprovementScout cycle: {scout_err}")
+                    last_research_tick_date = today_str
 
             except Exception as e:
                 logger.error(f"Error in CronEngine loop: {e}")
 
             # Sleep 60 seconds between tick checks
             await asyncio.sleep(60)
-

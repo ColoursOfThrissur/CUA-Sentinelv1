@@ -1,8 +1,4 @@
-"""Blender build route — direct path to progressive_v2 pipeline.
-
-This is the ONLY build path. No fallbacks to v4/staged pipeline.
-Uses progressive_v2 for all builds: simple and complex.
-"""
+"""Blender build route using the primary V2 model pipeline."""
 
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
@@ -26,12 +22,8 @@ class DimensionVerifyRequest(BaseModel):
 
 @router.post("/build")
 async def build_3d_object(req: BlenderBuildRequest, request: Request):
-    """Build a 3D object in Blender using progressive_v2 pipeline.
-    
-    This is the ONLY build path:
-    progressive_v2 → recursive decomposition → per-node stages → Blender MCP → verification
-    """
-    from core.blender_pipeline.progressive_v2 import run_progressive_build, HierarchyLimits
+    """Plan, compile, and verify a 3D object in Blender with V2."""
+    from core.blender_pipeline.progressive_v2 import HierarchyLimits, run_progressive_build
     
     # Get managers from app state
     model_manager = getattr(request.app.state, "model_manager", None)
@@ -44,39 +36,32 @@ async def build_3d_object(req: BlenderBuildRequest, request: Request):
     import uuid
     task_id = f"blender_build_{uuid.uuid4().hex[:8]}"
     
-    # Run progressive_v2 pipeline
+    # V3 remains experimental until it can match V2 on complex model fidelity.
+    import logging
+    logging.getLogger(__name__).info("[task=%s] /api/blender/build routed to V2", task_id)
     result = await run_progressive_build(
         prompt=req.description,
         model_manager=model_manager,
         task_id=task_id,
         mcp_manager=mcp_manager,
-        limits=HierarchyLimits(max_depth=6, max_children=20, max_total_nodes=200),
+        limits=HierarchyLimits(max_depth=60, max_children=200, max_total_nodes=2000),
+        use_llm_modifiers=req.use_llm_modifiers,
     )
     
-    if not result.success:
-        return {
-            "ok": False,
-            "error": "; ".join(result.errors) if result.errors else "Build failed",
-            "task_id": task_id,
-            "completion_status": result.completion_status.value,
-            "total_nodes": result.total_nodes,
-            "verified_nodes": result.verified_nodes,
-            "failed_nodes": result.failed_nodes,
-        }
-    
-    return {
-        "ok": True,
+    # Result serialization is the API contract.  It carries the same
+    # controller-computed BuildOutcome persisted in manifest.json.
+    payload = result.to_dict()
+    from core.blender_pipeline.progressive_v2.outcome_policy import TaskDisposition, task_disposition
+    disposition = task_disposition(result.completion_status)
+    payload.update({
+        "ok": disposition is not TaskDisposition.NOT_DONE,
         "task_id": task_id,
-        "completion_status": result.completion_status.value,
-        "total_nodes": result.total_nodes,
-        "verified_nodes": result.verified_nodes,
-        "failed_nodes": result.failed_nodes,
-        "skipped_nodes": result.skipped_nodes,
-        "blender_objects": result.blender_objects,
-        "build_time_seconds": round(result.build_time_seconds, 2),
-        "llm_calls": result.llm_calls,
-        "blender_ops": result.blender_ops,
-    }
+        "pipeline": result.manifest.stats.get("pipeline", "unknown"),
+        "task_outcome": disposition.value,
+    })
+    if disposition is TaskDisposition.NOT_DONE:
+        payload["error"] = "; ".join(result.errors) if result.errors else "Build failed"
+    return payload
 
 
 @router.get("/primitive-readback")

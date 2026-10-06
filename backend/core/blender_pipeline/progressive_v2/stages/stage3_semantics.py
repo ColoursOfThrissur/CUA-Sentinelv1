@@ -243,11 +243,29 @@ class Stage3Semantics:
         # Simple sockets don't need LLM call
         if not required_fields:
             return {}
-        
+
+        # Pre-seed from decomposition hint — these values were set by the LLM
+        # during decomposition and must be preserved exactly. If all required
+        # fields are already present in the hint, skip the LLM call entirely.
+        hint = node.stage_outputs.get("decomposition_hint", {})
+        hint_seed = {}
+        for f in required_fields:
+            if f in hint and hint[f] is not None:
+                hint_seed[f] = hint[f]
+
+        if set(hint_seed.keys()) >= set(required_fields):
+            # All fields already known from decomposition — validate and return
+            parent_label = manifest.nodes[node.parent_id].label if (node.parent_id and node.parent_id in manifest.nodes) else None
+            result = cls._parse_and_validate(
+                json.dumps(hint_seed), node, required_fields, parent_label=parent_label
+            )
+            return cls._enforce_repeated_sibling_slots(node, manifest, result, socket_type)
+
         mid = model_id or model_manager.get_model_for_workflow("ENDPOINT")
         
-        # Build context
-        context = cls._build_context(node, manifest, required_fields)
+        # Build context, injecting any already-known hint values so the LLM
+        # only needs to fill in the missing fields.
+        context = cls._build_context(node, manifest, required_fields, hint_seed=hint_seed)
         
         response = await model_manager.generate_async(
             model_id=mid,
@@ -260,9 +278,39 @@ class Stage3Semantics:
         )
         
         manifest.record_llm_call()
+        manifest.append_llm_log(node.label, context, response)
         
-        parent_label = manifest.nodes[node.parent_id].label if node.parent_id else None
-        return cls._parse_and_validate(response, node, required_fields, parent_label=parent_label)
+        parent_label = manifest.nodes[node.parent_id].label if (node.parent_id and node.parent_id in manifest.nodes) else None
+        result = cls._parse_and_validate(response, node, required_fields, parent_label=parent_label)
+        # Merge: hint_seed wins for fields the LLM might have corrupted
+        for k, v in hint_seed.items():
+            result[k] = v
+        return cls._enforce_repeated_sibling_slots(node, manifest, result, socket_type)
+
+    @classmethod
+    def _enforce_repeated_sibling_slots(
+        cls, node: ManifestNode, manifest: BuildManifest, result: Dict[str, Any], socket_type: SocketType,
+    ) -> Dict[str, Any]:
+        """Derive repeated placement slots from tree order, never LLM output."""
+        if socket_type in (SocketType.RADIAL, SocketType.RADIAL_BRIDGE, SocketType.ARRAY_MEMBER):
+            parent = manifest.nodes.get(node.parent_id) if node.parent_id else None
+            if parent:
+                peers = [
+                    manifest.nodes[child_id]
+                    for child_id in parent.children_ids
+                    if child_id in manifest.nodes
+                    and manifest.nodes[child_id].attachment
+                    and manifest.nodes[child_id].attachment.socket_type == socket_type
+                ]
+                if peers:
+                    index = peers.index(node)
+                    if socket_type == SocketType.ARRAY_MEMBER:
+                        result["array_count"] = len(peers)
+                        result["array_index"] = index
+                    else:
+                        result["radial_count"] = len(peers)
+                        result["radial_index"] = index
+        return result
     
     @classmethod
     def _build_context(
@@ -270,6 +318,7 @@ class Stage3Semantics:
         node: ManifestNode,
         manifest: BuildManifest,
         required_fields: List[str],
+        hint_seed: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Build context string for LLM."""
         lines = []
@@ -317,32 +366,117 @@ class Stage3Semantics:
         
         # Exclude own parent from suggestion lists — connecting to your own parent
         # produces a zero-length span for BRIDGE/STRUT/RADIAL_BRIDGE and is always wrong.
-        parent_label = manifest.nodes[node.parent_id].label if node.parent_id else None
-
-        # For RELATIVE_TO, list available reference parts
+        parent_label = manifest.nodes[node.parent_id].label if (node.parent_id and node.parent_id in manifest.nodes) else None
         if "relative_to" in required_fields:
-            available_refs = [
-                n.label for n in manifest.nodes.values()
-                if n.node_id != node.node_id
-                and n.label != parent_label
-                and n.kind == NodeKind.PART
-            ]
-            lines.append(f"\nAvailable reference parts: {available_refs[:10]}")
+            available_refs = cls._relevant_reference_targets(
+                node, manifest, parent_label, max_shown=20
+            )
+            if available_refs["truncated"]:
+                logger.info(
+                    "Stage3 [%s]: reference target list truncated to %d/%d "
+                    "(filtered by assembly proximity)",
+                    node.label, len(available_refs["shown"]), available_refs["total"],
+                )
+            note = (
+                f" (showing {len(available_refs['shown'])} of {available_refs['total']} "
+                f"by proximity; others exist but are in distant assemblies)"
+                if available_refs["truncated"] else ""
+            )
+            lines.append(f"\nAvailable reference parts{note}: {available_refs['shown']}")
         
         # For connects_to, list available targets
         if "connects_to" in required_fields:
-            available_targets = [
-                n.label for n in manifest.nodes.values()
-                if n.node_id != node.node_id
-                and n.label != parent_label
-                and n.kind == NodeKind.PART
-            ]
-            lines.append(f"\nAvailable connection targets: {available_targets[:10]}")
+            available_targets = cls._relevant_reference_targets(
+                node, manifest, parent_label, max_shown=20
+            )
+            if available_targets["truncated"]:
+                logger.info(
+                    "Stage3 [%s]: connection target list truncated to %d/%d "
+                    "(filtered by assembly proximity)",
+                    node.label, len(available_targets["shown"]), available_targets["total"],
+                )
+            note = (
+                f" (showing {len(available_targets['shown'])} of {available_targets['total']} "
+                f"by proximity; others exist but are in distant assemblies)"
+                if available_targets["truncated"] else ""
+            )
+            lines.append(f"\nAvailable connection targets{note}: {available_targets['shown']}")
         
         lines.append(f"\nProvide semantic hints for {node.label}.")
         
+        # Tell the LLM which fields are already known so it only fills in the rest
+        if hint_seed:
+            lines.append(f"Already known (do NOT change): {hint_seed}")
+        
         return "\n".join(lines)
     
+    @classmethod
+    def _relevant_reference_targets(
+        cls,
+        node: "ManifestNode",
+        manifest: "BuildManifest",
+        parent_label: Optional[str],
+        max_shown: int = 20,
+    ) -> Dict[str, Any]:
+        """Return a relevance-ordered list of candidate reference targets.
+
+        Priority order:
+        1. Siblings in the same assembly (most likely targets)
+        2. Parts in sibling assemblies of the same parent
+        3. Parts in uncle assemblies (grandparent's other children)
+        4. Everything else (distant)
+
+        When the total exceeds max_shown, items are dropped from the bottom
+        of the priority list and the truncation is logged by the caller.
+        """
+        from ..node_types import NodeKind as _NK
+
+        # Build ancestor set for filtering
+        def get_ancestor_ids(n_id: str) -> List[str]:
+            ids = []
+            cur = manifest.nodes.get(n_id)
+            while cur and cur.parent_id:
+                ids.append(cur.parent_id)
+                cur = manifest.nodes.get(cur.parent_id)
+            return ids
+
+        node_ancestors = get_ancestor_ids(node.node_id)
+        parent_id = node.parent_id
+        grandparent_id = (
+            manifest.nodes[parent_id].parent_id
+            if parent_id and parent_id in manifest.nodes
+            else None
+        )
+
+        tier1, tier2, tier3, tier4 = [], [], [], []
+
+        for n in manifest.nodes.values():
+            if n.node_id == node.node_id:
+                continue
+            if n.label == parent_label:
+                continue
+            if n.kind != _NK.PART:
+                continue
+            lbl = n.label
+            if n.parent_id == parent_id:
+                tier1.append(lbl)  # Same assembly sibling
+            elif (
+                grandparent_id
+                and n.parent_id
+                and manifest.nodes.get(n.parent_id, None) is not None
+                and manifest.nodes[n.parent_id].parent_id == grandparent_id
+            ):
+                tier2.append(lbl)  # Sibling assembly's child
+            elif grandparent_id and n.parent_id in node_ancestors:
+                tier3.append(lbl)  # Uncle assembly
+            else:
+                tier4.append(lbl)  # Distant
+
+        ordered = tier1 + tier2 + tier3 + tier4
+        total = len(ordered)
+        shown = ordered[:max_shown]
+        return {"shown": shown, "total": total, "truncated": total > max_shown}
+
     @classmethod
     def _parse_and_validate(
         cls,

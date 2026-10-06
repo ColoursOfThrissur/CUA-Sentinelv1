@@ -1,431 +1,486 @@
-# Blender Assembly Pipeline — Architecture Blueprint v4
+# Blender Pipeline — Living Blueprint
 
-**Status:** IMPLEMENTED AND VERIFIED  
-**Last Updated:** January 2025  
-**Test Coverage:** 59 pipeline tests passing
-
-**Audience:** An implementing coding assistant with no memory of prior discussion.  
-**Purpose:** This document describes the IMPLEMENTED staged pipeline architecture.
-The LLM makes only semantic/creative judgments; code owns 100% of numeric geometry.
+> **Ground truth only. Every statement here is verified against actual code.**
+> Separate sections for CURRENT BEHAVIOR, KNOWN DEFECTS, and OPEN DECISIONS.
+> Update this file when code changes. Never document intended behavior as current.
 
 ---
 
-## 0. The Core Invariant
+## Bug Registry (canonical list)
 
-> **No numeric offset or rotation value that reaches Blender may come directly from the
-> LLM. Every axis of every transform is either (a) computed by deterministic code from
-> real part geometry, or (b) derived from a closed-vocabulary semantic hint the LLM
-> chose from a fixed list. There is no path (c): "LLM's raw number, trusted as-is."**
+| ID | Node | Symptom | Confirmed Root Cause | Status |
+|---|---|---|---|---|
+| BUG-001 | `cage_assembly` | `children_ids: []`, `blender_objects: []`, verified as `type: leaf_assembly` | Exact failure point unknown. Do not attribute until state transitions are traced from actual log data. | Open — untraced |
+| BUG-002 | `motor_housing_assembly` | Placed at local Z=0.05 (inside base) instead of correct position above `vertical_rod` | `run_assembly()` TOP_CENTER restricts reference candidates to ROOT-socket siblings only. `vertical_rod` has TOP_CENTER socket so is excluded. | Open — fix contract not settled |
+| BUG-003 | `cage_assembly` transform | Identity transform, `source="ASSEMBLY:FRONT_FACE:unsupported"` | `run_assembly()` had no assembly-level handler for FRONT_FACE. Fell through to `else` branch → identity + warning log. | **Fixed** — see Stage 4 change log |
+| BUG-004 | All assemblies with non-center sockets | Flat output — all parts placed at/near world origin | `run_assembly()` `else` branch returned identity for any socket not in the 7 named cases. All children inherited `world_matrix` at `[0,0,0]`. | **Fixed** — see Stage 4 change log |
 
 ---
 
-## 1. File Structure
+## Pipeline Entry
 
 ```
-backend/core/blender_pipeline/
-├── orchestrator.py          # Runs Stages 0-4, returns PipelineResult
-├── executor.py              # Runs Stages 4.5-6, executes in Blender
-├── stage0_understanding.py  # Object category, scale, style
-├── stage1_topology.py       # Part tree structure (no numbers)
-├── stage2_dimensions.py     # Sizes in meters
-├── stage3_semantics.py      # Attachment hints (height_hint, etc.)
-├── stage4_resolver.py       # PURE CODE: computes all transforms
-├── stage45_modifiers.py     # Bevel/subsurf intent
-└── broadcast.py             # WebSocket trace events
-
-backend/core/
-├── assembly_spec.py         # AssemblyGraph, AssemblyNode, graph_to_blender_steps()
-├── assembly_verification.py # Spatial verification gate
-└── blender_ops.py           # Blender operation templates (Pydantic models)
+POST /api/blender  (or task queue)
+        │
+        ▼
+  controller.py  ──  BuildManifest.create(prompt)
+        │              model_id = "m_{10-hex}"
+        │              root node: kind=MODEL, state=PLANNED, depth=0
+        ▼
+  RecursiveDecomposer.decompose()
+        │
+        ▼
+  [Stage 2 → Stage 3 → Stage 4 per PART node]
+        │
+        ▼
+  Executor (build geometry in Blender)
 ```
 
 ---
 
-## 2. Pipeline Overview (IMPLEMENTED)
+## Stage 0 — Decomposition (`decomposer.py`)
+
+### CURRENT BEHAVIOR
+
+#### Limits (`hierarchy.py` — `HierarchyLimits` defaults)
+
+| Limit | Value | Note |
+|---|---|---|
+| `max_depth` | **16** | Intentionally higher than all other limits — depth is the last stop condition |
+| `max_children` | 25 | Per node |
+| `max_total_nodes` | 300 | Entire manifest |
+| `max_llm_calls` | 30 | Per build (set on `RecursiveDecomposer`, not `HierarchyLimits`) |
+
+`trace_pipeline.py` overrides these locally: `max_depth=6, max_total_nodes=60, max_children=12`.
+
+#### Limit enforcement — exact behavior
+
+`StopConditionEvaluator.should_decompose()` stops decomposition for a node when:
+- node already has children
+- node kind not in `DECOMPOSABLE_KINDS`
+- `node.hierarchy_depth >= limits.max_depth`
+- `limits.max_total_nodes - len(manifest.nodes) < 2`
+- node geometry is a terminal primitive (SPHERE, HEMISPHERE, TORUS)
+- `stage_outputs["decomposition_hint"]["is_simple"] == True` AND no `_nested_children`
+- node kind is INSTANCE
+
+`tree.can_add_child()` checks depth, children count, and total nodes before each child is added during `_decompose_node`. If it returns False, the loop breaks and remaining children are silently dropped.
+
+#### Validation boundary
+
+LLM output is untrusted. The decomposer operates strictly within this boundary:
+
+**May:**
+- parse JSON
+- normalize nested children (`_flatten_children`)
+- validate/coerce structural fields
+- record `ValidationWarning`s
+- reject invalid decomposition
+
+**Must NOT:**
+- infer spatial transforms
+- calculate bounding boxes
+- resolve semantic attachment geometry
+- mutate Blender state
+- commit partially validated nodes
+
+#### Decomposition flow
 
 ```
-User Prompt
-     │
-     ▼
-┌─────────────────────────────────────────────────────────┐
-│ ORCHESTRATOR (orchestrator.py) — Stages 0-4             │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  Stage 0 — Object Understanding (LLM)                   │
-│    Output: category, rests_on_surface, style_tag,       │
-│            scale_anchor_m                               │
-│    File: stage0_understanding.py                        │
-│                                                         │
-│  Stage 1 — Part Topology (LLM)                          │
-│    Output: parts[] with label, primitive_type,          │
-│            parent_label, socket_type                    │
-│    CRITICAL: NO NUMBERS ALLOWED                         │
-│    File: stage1_topology.py                             │
-│                                                         │
-│  Stage 2 — Dimension Assignment (LLM + validation)      │
-│    Output: size/radius/depth per part in meters         │
-│    Code validates against scale_anchor                  │
-│    File: stage2_dimensions.py                           │
-│                                                         │
-│  Stage 3 — Attachment Semantics (LLM)                   │
-│    Output: height_hint, pierce_direction, connects_to,  │
-│            cut_face, radial_count, radial_index, etc.   │
-│    STILL NO RAW OFFSET/ROTATION NUMBERS                 │
-│    File: stage3_semantics.py                            │
-│                                                         │
-│  Stage 4 — Deterministic Resolution (PURE CODE)         │
-│    Output: AssemblyGraph with computed transforms       │
-│    Every offset + rotation from real geometry           │
-│    File: stage4_resolver.py                             │
-│                                                         │
-│  Returns: PipelineResult with AssemblyGraph             │
-└─────────────────────────────────────────────────────────┘
-     │
-     ▼
-┌─────────────────────────────────────────────────────────┐
-│ EXECUTOR (executor.py) — Stages 4.5-6                   │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  Stage 4.5 — Modifier Intent (LLM or inference)         │
-│    Output: bevel, subsurf, surface_detail per part      │
-│    File: stage45_modifiers.py                           │
-│                                                         │
-│  Stage 5 — Blender Execution                            │
-│    - graph_to_blender_steps() generates tool calls      │
-│    - Three phases: Geometry → Boolean → Modifiers       │
-│    - Collection-based isolation (no clear_scene)        │
-│    - Transactional: rollback on any failure             │
-│    File: executor.py + assembly_spec.py                 │
-│                                                         │
-│  Stage 6 — Verification                                 │
-│    - _run_verification(): spatial/interpenetration      │
-│    - _verify_dimensions_match_spec(): LOCAL mesh check  │
-│    - _verify_connectors_reach_targets(): STRUT/BRIDGE   │
-│    - _verify_boolean_postconditions(): mesh validity    │
-│    FAIL = rollback + PipelineStatus.VERIFICATION_FAILED │
-│    File: executor.py + assembly_verification.py         │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
-     │
-  PASS │ FAIL
-     │    └── Rollback generation, purge orphans
-     ▼
-  SUCCESS (PipelineStatus.SUCCESS)
+_decompose_node(node)
+    │
+    ├─ StopConditionEvaluator.should_decompose()
+    │       → if False: transition PLANNED→READY, return
+    │
+    ├─ pre_parsed_children provided?
+    │       YES → _parse_pre_parsed_children()   (no LLM call)
+    │       NO  → _call_llm_decompose()          (LLM call, increments counter)
+    │
+    ├─ _flatten_children()
+    │       strips "children" key, adds "_nested_children" recursively
+    │       pure normalisation — no validation, no manifest writes
+    │
+    ├─ _parse_child()  [per child]
+    │       ├─ label missing → ValueError (child skipped)
+    │       ├─ DUPLICATE label → ValueError("DUPLICATE_NODE_ID:…")
+    │       │       ↳ entire decomposition returns SKIP result
+    │       │         manifest NOT committed, node → FAILED
+    │       │         NO auto-rename
+    │       ├─ kind: "assembly"|"part" only; anything else → PART
+    │       ├─ primitive: invalid → coerce to BOX + ValidationWarning
+    │       └─ socket_type: _infer_socket_type()
+    │               ├─ corner label patterns → CORNER (no warning)
+    │               ├─ ROOT requested + already have ROOT → demote + warning
+    │               ├─ index==0 + no ROOT yet → force ROOT + warning if requested≠ROOT
+    │               └─ invalid enum → TOP_CENTER (silent fallback)
+    │
+    ├─ manifest.commit_decomposition()  [atomic]
+    │       checks (in order, all-or-nothing):
+    │       1. parent exists
+    │       2. no candidate label collides with ANY existing manifest node
+    │       3. no duplicate labels within this candidate batch
+    │          NOTE: "part","part","part" fails check #3.
+    │                A later decomposition of a different node could fail check #2.
+    │                These are distinct failure modes.
+    │       4. exactly one ROOT child
+    │       5. no candidate label matches an ancestor label (cycle guard)
+    │       → raises ValueError on any failure → node → FAILED
+    │
+    └─ recurse into ASSEMBLY children
+            nested children → pre_parsed_children path (no LLM)
+            no nested children → LLM path
 ```
+
+`warnings: []` in the LLM log is not inconsistent with the duplicate hard-error
+behaviour — duplicates are rejected before any warning is recorded.
+
+#### Global label uniqueness — design concern (unresolved)
+
+`commit_decomposition` check #2 enforces globally unique labels across the entire
+manifest. This means two different assemblies cannot both contain a child named
+`bracket` or `housing`.
+
+The current identity model: label is used as the lookup key in
+`manifest.get_node_by_label()`, which is called by Stage 3 and Stage 4 cross-
+reference resolvers (`connects_to`, `relative_to`). If labels were scoped,
+these resolvers would need a scoped path rather than a flat label.
+
+**Do not change this until the full reference chain is traced.** If labels are
+being used as node identity throughout Stage 3/4, this becomes a broader
+migration (node_id = generated identity, label = semantic name, references use
+scoped paths). Verify before touching.
 
 ---
 
-## 3. Stage Specifications
+## Stage 1 — (not yet traced)
 
-### 3.0 Stage 0 — Object Understanding
-
-**Input:** Raw user prompt  
-**LLM outputs:**
-```json
-{
-  "category": "weapon",
-  "rests_on_surface": true,
-  "style_tag": "hard_surface_industrial",
-  "scale_anchor_m": {
-    "overall_height_or_length": 1.2,
-    "reasoning": "broadsword, typical length ~1.2m"
-  }
-}
-```
-
-**style_tag vocabulary:** `hard_surface_industrial | organic_worn | stylized_clean | soft_domestic`
+No `stage1_topology.py` exists in `progressive_v2/stages/`. The file
+`backend/core/blender_pipeline/stage1_topology.py` exists at the top level but
+its relationship to the v2 pipeline is unconfirmed. Fill this section once
+traced.
 
 ---
 
-### 3.1 Stage 1 — Part Topology
+## Stage 2 — Dimensions (`stages/stage2_dimensions.py`)
 
-**Input:** Prompt + Stage 0 output  
-**LLM outputs:** Parts array with NO NUMBERS
-```json
-{
-  "parts": [
-    {"label": "blade", "primitive_type": "box", "parent_label": null, "socket_type": "ROOT"},
-    {"label": "groove", "primitive_type": "box", "parent_label": "blade", "socket_type": "BOOLEAN_CUT"},
-    {"label": "guard", "primitive_type": "box", "parent_label": "blade", "socket_type": "BOTTOM_CENTER"},
-    {"label": "handle", "primitive_type": "cylinder", "parent_label": "guard", "socket_type": "BOTTOM_CENTER"}
-  ]
-}
-```
+### CURRENT BEHAVIOR
 
-**primitive_type vocabulary:** `box | cylinder | cone | sphere`  
-(Note: `hemisphere` is created via bisect, not a separate primitive)
+Assigns physical dimensions to each PART node. Called per-node. Writes
+`node.stage_outputs["stage2"]` and calls `output.apply_to_geometry(node.geometry)`.
 
-**socket_type vocabulary:**
-```
-ROOT
-TOP_CENTER | BOTTOM_CENTER
-THROUGH_AXIS
-LEFT_END | RIGHT_END | TOP_END | BOTTOM_END
-FRONT_FACE | BACK_FACE | LEFT_FACE | RIGHT_FACE | TOP_FACE | BOTTOM_FACE
-ARRAY_MEMBER
-STRUT
-RADIAL
-RADIAL_BRIDGE
-CORNER
-EDGE
-INSET
-BOOLEAN_CUT    ← NEW: Part subtracted from parent (grooves, holes, cutouts)
-```
+LLM call per node (temperature=0.1). Falls back to hardcoded defaults on
+exception (see `trace_pipeline.py` fallback block).
+
+`BBox.from_geometry()` in Stage 4 reads `stage_outputs["stage2"]` to compute
+bounding boxes. Stage 4 raises `Stage4Error` if `stage2` is not populated.
 
 ---
 
-### 3.2 Stage 2 — Dimension Assignment
+## Stage 3 — Semantics (`stages/stage3_semantics.py`)
 
-**Input:** Stage 0 + Stage 1 output  
-**LLM outputs:** Dimensions per part in meters
-```json
-{
-  "parts": [
-    {"label": "blade", "primitive_type": "box", "dimensions": {"size": [0.08, 0.02, 1.0]}},
-    {"label": "groove", "primitive_type": "box", "dimensions": {"size": [0.02, 0.005, 0.7]}},
-    {"label": "guard", "primitive_type": "box", "dimensions": {"size": [0.25, 0.03, 0.04]}},
-    {"label": "handle", "primitive_type": "cylinder", "dimensions": {"radius": 0.02, "depth": 0.15}}
-  ]
-}
-```
+### CURRENT BEHAVIOR
 
-**Code validates:** Ratio against scale_anchor, rejects severe mismatches.
+Adds semantic attachment hints to a PART node's `AttachmentSpec`. Called per-node.
 
----
+**Simple sockets** (ROOT, TOP_CENTER, BOTTOM_CENTER, FRONT/BACK/LEFT/RIGHT_CENTER,
+LEFT/RIGHT/TOP/BOTTOM/FRONT/BACK_END, EMBEDDED, SURFACE_FOLLOW, SCATTER,
+CURVE_FOLLOW, VOLUME_FILL, BONE_*, BOOLEAN_UNION, BOOLEAN_INTERSECT) return `{}`
+immediately — no LLM call.
 
-### 3.3 Stage 3 — Attachment Semantics
+**Complex sockets** require LLM call to fill fields defined in `SOCKET_SEMANTICS`.
 
-**Input:** Stage 1 + Stage 2 output  
-**LLM outputs:** Semantic hints per socket_type (NO raw numbers)
-```json
-{
-  "parts": [
-    {"label": "blade", "socket_type": "ROOT"},
-    {"label": "groove", "socket_type": "BOOLEAN_CUT", "cut_face": "front", "height_hint": "center"},
-    {"label": "guard", "socket_type": "BOTTOM_CENTER"},
-    {"label": "handle", "socket_type": "BOTTOM_CENTER"}
-  ]
-}
-```
+**Pre-seed from decomposition hint**: fields already present in
+`node.stage_outputs["decomposition_hint"]` are extracted first. If all required
+fields are already present, the LLM call is skipped entirely. After the LLM call,
+`hint_seed` values overwrite LLM output for those fields (hint_seed wins).
 
-**Required fields by socket_type:**
-| socket_type | Required Fields |
-|-------------|-----------------|
-| THROUGH_AXIS | pierce_direction |
-| STRUT | connects_to |
-| RADIAL_BRIDGE | connects_to, radial_count, radial_index |
-| RADIAL | radial_count, radial_index |
-| ARRAY_MEMBER | array_count, array_index |
-| BOOLEAN_CUT | (cut_face optional, defaults to "top") |
+**Cross-reference fields** (`connects_to`, `relative_to`) are resolved here by
+label lookup. Stage 3 provides the label string; Stage 4 resolves it to a node
+and computes geometry. Stage 3 does NOT compute positions.
+
+**`connects_to` / `relative_to` cannot equal the node's own parent** — Stage 3
+raises `Stage3Error` if this is detected.
+
+`apply_to_attachment(node.attachment, semantics)` writes results to the
+`AttachmentSpec` via `setattr`.
+
+### OPEN DECISION — Stage 3 / Stage 4 reference contract
+
+Stage 3 currently resolves `connects_to` / `relative_to` to a label string.
+Stage 4 then calls `manifest.get_node_by_label()` to find the node and computes
+geometry independently.
+
+The architectural direction (not yet implemented): Stage 3 should supply an
+explicit `reference_node_id` so Stage 4 receives a resolved node reference, not
+a label it must re-resolve. This would eliminate Stage 4's need to independently
+discover reference geometry and would make BUG-002 easier to reason about.
+
+**Do not implement until the full Stage 3 → Stage 4 contract is traced and
+agreed.**
 
 ---
 
-### 3.4 Stage 4 — Deterministic Resolution (PURE CODE)
+## Stage 4 — Transform Resolver (`stages/stage4_resolver.py`)
 
-**Input:** Stage 0 + Stage 2 + Stage 3 output  
-**Output:** Complete AssemblyGraph with all transforms computed
+### CURRENT BEHAVIOR
 
-**Key invariant:**
+Pure code — no LLM calls. Deterministic transform computation.
+
+`run()` handles PART nodes. Returns `(ResolvedTransform, AttachmentSolution)`.
+`run_assembly()` handles ASSEMBLY/MODEL nodes. Returns `AttachmentSolution`.
+
+**Coordinate convention**: Blender convention throughout.
+- +Z = up
+- -Y = front
+- +Y = back
+- +X = right
+- -X = left
+
+`BlenderAxis.get_direction()` is the single source of truth for direction→axis
+mapping. Do not hardcode direction signs elsewhere.
+
+#### Supported sockets in `run()` (PART path)
+
+All sockets in `_get_resolver()` dispatch table are supported. Unsupported
+sockets raise `Stage4Error` — there is no silent fallback in the PART path.
+
+Cross-reference sockets (BRIDGE, STRUT, RELATIVE_TO, RADIAL_BRIDGE) use
+two-pass resolution:
+- Pass 1: placeholder transform stored (`_resolve_*_pass1`)
+- Pass 2: `resolve_cross_reference()` called after all pass-1 world matrices
+  are available. Converts desired world matrix to parent-local via
+  `child_local = inverse(parent_world) @ child_world`.
+
+#### Supported sockets in `run_assembly()` (ASSEMBLY path)
+
+| Socket | Behavior |
+|---|---|
+| `ROOT` | Identity transform |
+| `TOP_CENTER` | `ref_attachment_local[2] = ref_bbox.max_z` |
+| `BOTTOM_CENTER` | `ref_attachment_local[2] = ref_bbox.min_z` |
+| `FRONT_CENTER` | `ref_attachment_local[1] = ref_bbox.min_y` |
+| `BACK_CENTER` | `ref_attachment_local[1] = ref_bbox.max_y` |
+| `LEFT_CENTER` | `ref_attachment_local[0] = ref_bbox.min_x` |
+| `RIGHT_CENTER` | `ref_attachment_local[0] = ref_bbox.max_x` |
+| **all others** | Delegated to the PART resolver for that socket type via `_get_resolver(socket)`. The resolver's parent-local offset is lifted to world space via `parent_world.transform_point()`, then converted back to `LocalTransform` via `_world_to_parent_local()`. On resolver failure, falls back to identity with `source="ASSEMBLY:{socket}:fallback_identity"`. |
+
+`run_assembly()` requires `parent_world` (WorldMatrix) for all non-ROOT sockets.
+Raises `Stage4Error` if not provided.
+
+#### Reference sibling selection in `run_assembly()`
+
+For all sockets, `run_assembly()` iterates `parent_node.children_ids` looking
+for siblings with `socket_type == SocketType.ROOT`. Only ROOT-socket siblings
+are candidates for the reference bbox.
+
+For `TOP_CENTER` specifically: among ROOT-socket siblings, selects the one with
+the greatest `candidate_bbox.max_z`.
+
+For all other sockets: first ROOT-socket sibling wins.
+
+If no ROOT-socket sibling has geometry (stage2 not populated), returns identity
+with `source="ASSEMBLY:{socket}:deferred_no_ref_bbox"` and `confidence="low"`.
+
+#### BUG-002 — confirmed code path
+
+`motor_housing_assembly` (TOP_CENTER) inside `base_assembly`. Siblings:
+- `base` — socket=ROOT, box 0.4×0.6×0.1m, `max_z=0.05`
+- `vertical_rod` — socket=TOP_CENTER (not ROOT), excluded from candidates
+
+Only `base` is a ROOT-socket sibling → `ref_bbox.max_z = 0.05` →
+`motor_housing_assembly` placed at local Z=0.05.
+
+**Confirmed bug**: TOP_CENTER restricts reference candidates to ROOT-socket
+siblings. Incorrect when the semantic support sibling is non-ROOT.
+
+**Fix contract not yet settled.** Do not document a specific fix rule until
+the reference-selection contract for Stage 4 is finalized.
+
+#### BUG-003 / BUG-004 — fixed
+
+Previously: any assembly socket not in the 7 named cases hit `else` → identity
+at origin. All children inherited `world_matrix` at `[0,0,0]` → flat output.
+
+Fix: `else` branch now delegates to `_get_resolver(socket)` (the same dispatch
+table used by PART nodes). The resolver's parent-local offset is lifted to world
+space via `parent_world.transform_point()`, then converted back to `LocalTransform`
+via `_world_to_parent_local()`. On resolver failure, falls back to identity with
+`source="ASSEMBLY:{socket}:fallback_identity"` (not `"unsupported"`).
+
+The controller's deferred-check in `_ensure_assembly_transform` and
+`_process_assembly` now treats both `"deferred_no_ref_bbox"` and
+`"fallback_identity"` as deferred, so a failed resolver does not permanently
+lock the assembly to identity — it retries on the next iteration.
+
+#### `_get_parent_bbox()` — PART path bbox selection
+
+For ASSEMBLY/MODEL parents, bbox strategy depends on socket type:
+
+- `FRONT_FACE`, `BACK_FACE`, `LEFT_FACE`, `RIGHT_FACE`, `TOP_FACE`,
+  `BOTTOM_FACE`, `FRONT_CENTER`, `BACK_CENTER`, `LEFT_CENTER`, `RIGHT_CENTER`,
+  `RADIAL` → `_get_root_only_bbox()` (ROOT child's intrinsic geometry only)
+- all others → `_get_root_child_bbox()` which delegates to
+  `_get_assembly_aggregate_bbox()` (union of all children's transformed bboxes)
+
+`_get_root_child_bbox()` is a thin wrapper around `_get_assembly_aggregate_bbox()`
+kept for call-site compatibility.
+
+`_get_assembly_aggregate_bbox()` transforms each child's intrinsic bbox
+(Stage 2 geometry) into assembly-local space via `child.transform_state.local_transform`.
+Falls back to ROOT-child-only bbox if no child has stage2 data.
+
+---
+
+## Executor (`controller.py` + `executor.py`)
+
+### CURRENT BEHAVIOR
+
+#### Build loop (`controller.py`)
+
+```
+controller._is_actionable(node)
+    PART + READY + stage4 present → build geometry
+    ASSEMBLY + no children → run_assembly() (leaf assembly path)
+    ASSEMBLY + all children VERIFIED → merge
+
+controller._process_assembly(node)
+    no children + expected_child_count or _nested_children set
+        → raises RuntimeError("DECOMPOSITION_COMMIT_INCOMPLETE") → node FAILED
+    no children + PLANNED → re-decompose (max 5 LLM calls)
+        → if children added: recompile DAG, record_event("graph_recompiled"), return
+        → if still no children: fall through to leaf_assembly path
+    no children + READY → verify as leaf_assembly (type="leaf_assembly")
+    children done → merge children
+
+_ensure_assembly_transform(node)
+    lazy-computes assembly world matrix via run_assembly()
+    deferred if source contains "deferred_no_ref_bbox" OR "fallback_identity"
+```
+
+`_build_loop` safety limit: `max_iterations = len(self.manifest.nodes) * 3`, updated
+each iteration via `max_iterations = max(max_iterations, len(self.manifest.nodes) * 3)`
+so re-decomposition that adds nodes during the loop does not cause premature exit.
+
+Unknown `NodeKind` in `_KIND_HANDLERS`: calls `_handle_failure` with
+`"UNSUPPORTED_CAPABILITY"` error — does NOT silently mark VERIFIED.
+
+`all_children_done()` (manifest.py) requires VERIFIED or SKIPPED.
+FAILED does NOT count — an assembly with a FAILED child will not merge.
+
+#### Transform ownership contract (`executor.py`)
+
+`USE_HIERARCHICAL_TRANSFORMS = True` is hardcoded. The executor is a **read-only
+consumer** of `transform_state.world_matrix`. It must never write it.
+
+Authoritative write path (only):
+```
+Stage 4 → local_transform → controller._propagate_new_world_transform()
+        → NodeTransformState.compute_world() → world_matrix
+```
+
+If `transform_state.world_matrix` is `None` when `_compute_world_transform()` is
+called, it raises `RuntimeError` — the node fails rather than falling back to
+legacy. There is no legacy fallback path remaining.
+
+#### Blender object placement (`executor.py`)
+
+Each PART node is placed by passing `world_matrix` as a 4×4 matrix directly to
+`obj.matrix_world = mathutils.Matrix(matrix_rows)` in the Blender script. No
+Euler reconstruction. No `bpy.ops` location parameter.
+
+Sphere is the only primitive that still uses `location=tuple(pos)` in
+`primitive_uv_sphere_add` — it does not receive `matrix_rows`. This is a
+minor inconsistency but does not affect hierarchy correctness.
+
+#### Assembly merge (`executor.py` — `merge_assembly`)
+
+Creates a Blender Empty at the ROOT child's world position. Parents all child
+objects to it via:
 ```python
-def _resolve_transform(socket_type, parent_spec, child_spec, semantics) -> ResolvedTransform:
-    """
-    MUST assign every one of offset[0..2] and rotation[0..2] explicitly.
-    MUST NOT read any raw numeric field from LLM output.
-    Every branch must leave no axis unassigned.
-    """
+obj.parent = empty
+obj.matrix_parent_inverse = empty.matrix_world.inverted()
 ```
-
-**JoinMode enum:**
-- `FUSE` — Boolean union
-- `PARENT_ONLY` — Stays separate, parented
-- `BOOLEAN_DIFFERENCE` — Subtracted from parent (for BOOLEAN_CUT)
+Objects do not move — their world positions were already set by
+`_compute_world_transform`. The parent-child tree in the Blender outliner is
+real but cosmetic: all spatial positioning is done by world-space placement,
+not by the parent-child chain.
 
 ---
 
-### 3.5 Stage 4.5 — Modifier Intent
+## State Machine (`manifest.py`)
 
-**Input:** AssemblyGraph + style_tag  
-**Output:** ModifierIntent per part
+### CURRENT BEHAVIOR
+
+```
+PLANNED ──→ DECOMPOSING ──→ READY ──→ BUILDING ──→ VERIFYING ──→ VERIFIED
+   │                          │                                      │
+   └──────────────────────────┘                                   MERGING ──→ VERIFIED
+   (PLANNED→READY direct allowed)
+                              │
+                           FAILED ──→ RETRYING ──→ READY
+                                    └──→ SKIPPED  (terminal)
+
+VERIFIED ──→ STALE ──→ READY
+```
+
+Valid transitions are enforced by `_VALID_TRANSITIONS` dict. Any unlisted
+transition raises `ValueError`.
+
+`MERGING` is in the diagram but NOT shown in the state machine table in the
+previous blueprint version — that was a doc error. `MERGING` is a real state:
+`VERIFIED → MERGING` and `MERGING → VERIFIED` are both valid.
+
+`FAILED → RETRYING → READY` is the retry path. `transition()` increments
+`node.retry_count` when transitioning to RETRYING.
+
+### KNOWN DEFECT — no transition history
+
+`transition()` mutates `node.state` in place. There is no record of prior
+states, timestamps, or failure reasons beyond `node.error_message` and
+`node.error_stage` (single values, overwritten on each failure).
+
+This is the primary reason BUG-001 cannot be traced from the manifest alone.
+The cage_assembly's state history is gone by the time the manifest is read.
+
+### OPEN DECISION — transition history
+
+Proposed addition to `ManifestNode`:
+
 ```python
-@dataclass
-class ModifierIntent:
-    label: str
-    bevel: Optional[BevelParams]      # width, segments
-    subsurf: Optional[SubsurfParams]  # levels
-    surface_detail: Optional[ArrayDetailParams]
+state_history: List[Dict] = field(default_factory=list)
+# Each entry: {"from": str, "to": str, "ts": str, "reason": {"code": str, "message": str} | None}
 ```
 
-Can run via LLM or inference (heuristics based on style_tag).
+`transition()` would append to `state_history` before mutating `node.state`.
+This is distinct from `ValidationWarning` (coercion record) and from
+`error_message` (last failure string).
+
+**Not yet implemented.** Implement as a standalone change before touching
+other architecture.
 
 ---
 
-### 3.6 Stage 5 — Blender Execution
+## Persistence
 
-**graph_to_blender_steps()** generates three phases:
+| File | Location | Purpose |
+|---|---|---|
+| `manifest.json` | `data/builds_v2/{model_id}/` | Full build state, atomic write via `.tmp` rename |
+| `llm_log.json` | `data/builds_v2/{model_id}/` | Raw LLM prompts + responses + warnings, append-only |
 
-1. **Geometry Phase:** `create_box`, `create_cylinder`, `set_material`
-2. **Boolean Phase:** `apply_boolean`, `parent_object`
-3. **Modifier Phase:** `set_smooth_shading`, `apply_bevel`, `apply_subdivision`
+`prune_old_builds(keep=3)` deletes all but 3 most-recent manifests (by
+`manifest.json` mtime). Directories without `manifest.json` are ignored.
 
-**Critical:** Modifiers apply AFTER booleans, so bevels apply to final joined mesh.
-
-**Collection-based isolation:**
-- Each build gets a unique generation collection (e.g., `sentinel_gen_task123_a1b2c3d4`)
-- Object names are prefixed with generation ID (e.g., `ga1b2c3_blade`) to avoid collisions
-- No `clear_scene` — user's existing scene preserved
-- Lights and cameras link to generation collection, not scene.collection
-- On failure: rollback deletes generation + **targeted** orphan cleanup (only orphans created by this build)
+**Operational risk**: pruning destroys forensic evidence for failed builds.
+No pin/archive mechanism exists. If a build fails and a newer build runs,
+the failed manifest may be pruned before the failure is investigated.
 
 ---
 
-### 3.7 Stage 6 — Verification
+## Change Log
 
-Four verification checks:
-
-1. **_run_verification()** — Spatial/interpenetration via AssemblyVerificationGate
-2. **_verify_dimensions_match_spec()** — LOCAL mesh bounds (not world AABB)
-3. **_verify_connectors_reach_targets()** — STRUT/RADIAL_BRIDGE length check
-4. **_verify_boolean_postconditions()** — Mesh validity (no degenerate faces)
-
-**CRITICAL:** Verification failure = pipeline failure (ok=False), never ok=True with warnings.
-
-**Retry on verification failure:**
-- Up to `MAX_VERIFICATION_RETRIES` (default: 1) retries from the **appropriate stage**:
-  - Dimension mismatch → retry from **Stage 2** (Dimensions)
-  - Spatial/interpenetration → retry from **Stage 3** (Semantics)
-  - Connector issues → retry from **Stage 3** (Semantics)
-  - Mesh issues (degenerate faces) → **not retryable** (geometry problem)
-- Each retry uses a new generation prefix to avoid name collisions
-- Verification error is passed as feedback to the retried stage
-- Rollback occurs before each retry attempt
-
-**PipelineStatus enum:**
-- `SUCCESS` — Build and verification passed
-- `BUILD_FAILED` — Stage 0-5 failed (LLM error, execution error)
-- `VERIFICATION_FAILED` — Stage 6 checks failed (spatial, dimension, mesh issues)
-- `VERIFICATION_UNAVAILABLE` — Verification could not run (exception in verifier). **Fail closed**: treated as failure, not success with warning.
-- `ROLLBACK_COMPLETE` — Internal state after rollback (not returned to user)
-
----
-
-## 4. Socket Type Resolver Rules (Stage 4)
-
-| socket_type | Offset Computation | Rotation |
-|-------------|-------------------|----------|
-| TOP_CENTER | (0, 0, p_half_z + c_half_z) | Inherit parent |
-| BOTTOM_CENTER | (0, 0, -(p_half_z + c_half_z)) | Inherit parent |
-| THROUGH_AXIS | X/Y=0, Z from height_hint clamped | From pierce_direction |
-| LEFT_END | (0, 0, -(p_half_length + c_half_z)) | Inherit parent |
-| RIGHT_END | (0, 0, p_half_length + c_half_z) | Inherit parent |
-| FRONT_FACE | (0, -(p_half_y + c_half_y), height_hint) | Flush to face |
-| RADIAL | R*cos(θ), R*sin(θ), height_hint | Face outward (rz=θ) |
-| RADIAL_BRIDGE | Midpoint of anchors, auto-sized depth | Quaternion to direction |
-| STRUT | Midpoint of anchors, auto-sized depth | Quaternion to direction |
-| BOOLEAN_CUT | Positioned to penetrate from cut_face | (0, 0, 0) |
-| INSET | Recessed into parent surface | Flush |
-| CORNER | At parent's corner + child offset | (0, 0, 0) |
-| EDGE | Along parent's edge | (0, 0, 0) |
-| ARRAY_MEMBER | Spaced along axis, NEVER tilted | Flush to face |
-
-**RADIAL on boxes:** Uses `min(half_x, half_y)` as effective radius.
-
-**Bounds-based socket offsets (asymmetric shapes):**
-For primitives with asymmetric bounds (e.g., hemisphere where z_min=0, z_max=radius),
-the resolver uses actual mesh bounds rather than symmetric half-extents:
-- `BOTTOM_CENTER` on hemisphere: offset = (0, 0, 0) since z_min is already at 0
-- `TOP_CENTER` on hemisphere: offset = (0, 0, radius) since z_max = radius
-
-This is computed in Stage 4 using the primitive's known geometry, not measured from Blender.
-
----
-
-## 5. Blender Conventions
-
-- **Units:** 1 Blender unit = 1 meter
-- **Rotation order:** Euler XYZ (Rz · Ry · Rx)
-- **Internal storage:** Radians (convert to degrees only at I/O boundary)
-- **Cylinder/cone axis:** Local +Z is depth/length axis
-- **Verification:** Uses LOCAL mesh bounds (circumradius for cylinders/spheres), not world AABB
-
----
-
-## 6. Key Implementation Details
-
-### 6.1 Rotation Composition
-Euler angles do NOT compose by addition. Use matrix multiplication:
-```python
-def _compose_rotations(parent_rot, child_rot) -> Tuple[float, float, float]:
-    parent_m = _euler_to_matrix(parent_rot)
-    child_m = _euler_to_matrix(child_rot)
-    composed_m = _matrix_multiply_3x3(parent_m, child_m)
-    return _matrix_to_euler(composed_m)
-```
-
-### 6.2 World Pose Computation
-For STRUT/RADIAL_BRIDGE, must compute actual world positions:
-```python
-def _compute_world_pose(node, nodes_by_label) -> WorldPose:
-    # Walk parent chain, accumulate transforms
-    # Returns world position + rotation
-```
-
-### 6.3 Connector Auto-Sizing
-STRUT and RADIAL_BRIDGE compute their depth from actual anchor distance:
-```python
-computed_length = sqrt(dx² + dy² + dz²)
-child_sub_spec["depth"] = computed_length  # Override LLM's guess
-```
-
-### 6.4 Boolean Operations
-BOOLEAN_CUT socket type sets `join_mode = JoinMode.BOOLEAN_DIFFERENCE`:
-- Stage 4 sets the join_mode
-- graph_to_blender_steps() emits `apply_boolean(operation="DIFFERENCE")`
-- Target (cutter) is deleted after boolean
-
----
-
-## 7. Test Coverage
-
-**59 tests in test_stage4_resolver.py covering:**
-- TOP_CENTER, BOTTOM_CENTER on various primitives
-- THROUGH_AXIS with all pierce_directions
-- LEFT_END, RIGHT_END with rotation inheritance
-- Face mounts (FRONT_FACE, etc.) with height_hint
-- ARRAY_MEMBER spacing and no-tilt invariant
-- RADIAL_BRIDGE distinct rotations per index
-- CORNER, EDGE, INSET positioning
-- RADIAL on boxes (uses min half-extent)
-- Parent cycle detection
-- Array feasibility warnings
-- Embedment validation
-
----
-
-## 8. API Entry Point
-
-```
-POST /api/blender/build
-{
-  "description": "fantasy broadsword with central groove",
-  "use_llm_modifiers": false
-}
-```
-
-Calls `run_staged_pipeline_and_execute()` which:
-1. Runs orchestrator (Stages 0-4)
-2. Runs executor (Stages 4.5-6)
-3. Returns success/failure with generation_id
-
----
-
-## 9. Debugging
-
-WebSocket traces broadcast to frontend at each stage:
-```python
-await broadcast_blender_trace(task_id, stage_num, stage_name, status, data)
-```
-
-Trace includes:
-- Stage number and name
-- Status: running/complete/failed/retrying
-- Stage-specific data (parts count, errors, etc.)
+| Date | Change | File(s) |
+|---|---|---|
+| 2026-09-30 | `max_depth` raised from 8 → 16 (intentionally above other limits) | `hierarchy.py` |
+| 2026-09-30 | Duplicate decomposition labels are a hard `DUPLICATE_NODE_ID` failure; no auto-rename and no manifest commit | `decomposer.py` |
+| 2026-09-30 | BUG-003/BUG-004 fixed: `run_assembly()` `else` branch now delegates to `_get_resolver(socket)` instead of returning identity. Deferred-check in controller updated to also treat `"fallback_identity"` source as deferred. | `stage4_resolver.py`, `controller.py` |
+| 2026-09-30 | Build loop `max_iterations` updated each iteration to account for nodes added by re-decomposition. Unknown `NodeKind` now calls `_handle_failure` instead of silently marking VERIFIED. `_process_assembly` raises `DECOMPOSITION_COMMIT_INCOMPLETE` if `expected_child_count` or `_nested_children` is set but no children were committed. DAG recompiled after successful re-decomposition. | `controller.py` |

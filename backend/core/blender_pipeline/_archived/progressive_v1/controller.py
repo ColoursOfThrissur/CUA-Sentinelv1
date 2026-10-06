@@ -26,11 +26,11 @@ from .merger import AssemblyMerger
 from .checkpoint import CheckpointManager
 from .dirty_propagation import DirtyPropagator
 
-from ..stage0_understanding import Stage0Understanding
-from ..stage2_dimensions import Stage2Dimensions, Stage2Output
-from ..stage3_semantics import Stage3Semantics, Stage3Output
-from ..stage4_resolver import Stage4Resolver, Stage4Error
-from ..broadcast import broadcast_blender_trace
+from ...stage0_understanding import Stage0Understanding
+from ..legacy_stages.stage2_dimensions import Stage2Dimensions, Stage2Output
+from ..legacy_stages.stage3_semantics import Stage3Semantics, Stage3Output
+from ..legacy_stages.stage4_resolver import Stage4Resolver, Stage4Error
+from ...broadcast import broadcast_blender_trace
 
 logger = logging.getLogger(__name__)
 

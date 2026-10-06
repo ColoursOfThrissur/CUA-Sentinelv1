@@ -50,7 +50,7 @@ class HierarchyLimits:
     These prevent runaway decomposition and ensure builds complete
     in reasonable time/memory.
     """
-    max_depth: int = 8              # Maximum hierarchy depth (root = 0)
+    max_depth: int = 16             # Maximum hierarchy depth (root = 0) — intentionally higher than other limits
     max_children: int = 25          # Maximum children per node
     max_total_nodes: int = 300      # Maximum nodes in entire manifest
     max_decomposition_attempts: int = 3  # Retries per node decomposition

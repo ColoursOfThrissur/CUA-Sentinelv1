@@ -1,0 +1,43 @@
+
+============================================================
+  Controller + Executor Live MCP Test
+  Table: 5 parts, 1 assembly, batch flush, live verify
+============================================================
+
+Connecting to Blender MCP...
+Connected. Tools: ['get_scene_info', 'get_viewport_screenshot', 'execute_blender_code']
+
+
+--- Node states ---
+  [model   ] simple_table         -> verified
+  [assembly] table_assembly       -> verified
+  [part    ] tabletop             -> verified
+  [part    ] leg_fl               -> verified
+  [part    ] leg_fr               -> verified
+  [part    ] leg_bl               -> verified
+  [part    ] leg_br               -> verified
+
+--- Checks ---
+[PASS] root MODEL verified
+[PASS] table_assembly VERIFIED
+[PASS] tabletop VERIFIED
+[PASS] leg_fl VERIFIED
+[PASS] leg_fr VERIFIED
+[PASS] leg_bl VERIFIED
+[PASS] leg_br VERIFIED
+[PASS] tabletop object_exists  (name=tabletop_8376b6)
+[PASS] leg_fl object_exists  (name=leg_fl_141f94)
+[PASS] leg_fr object_exists  (name=leg_fr_8f29d1)
+[PASS] leg_bl object_exists  (name=leg_bl_b8c738)
+[PASS] leg_br object_exists  (name=leg_br_138776)
+[PASS] tabletop world pos  (expected=[0.0, 0.0, 0.375] got=[0.0, 0.0, 0.375])
+[PASS] leg_fl world pos  (expected=[-0.35, -0.25, 0.175] got=[-0.35, -0.25, 0.175])
+[PASS] leg_fr world pos  (expected=[0.35, -0.25, 0.175] got=[0.35, -0.25, 0.175])
+[PASS] leg_bl world pos  (expected=[-0.35, 0.25, 0.175] got=[-0.35, 0.25, 0.175])
+[PASS] leg_br world pos  (expected=[0.35, 0.25, 0.175] got=[0.35, 0.25, 0.175])
+[FAIL] batch flush: 1 flush for 5 parts  (flush() called 3 time(s) -- expected 1)
+[PASS] cleanup ok  (['simple_table_assembly_7257b9', 'table_assembly_assembly_e679a9', 'tabletop_8376b6', 'leg_fl_141f94', 'leg_fr_8f29d1', 'leg_bl_b8c738', 'leg_br_138776'])
+
+============================================================
+  SOME CHECKS FAILED -- see above
+============================================================

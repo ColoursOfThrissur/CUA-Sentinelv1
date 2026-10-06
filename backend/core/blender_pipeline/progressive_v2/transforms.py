@@ -91,52 +91,10 @@ def _mat4_from_trs(
     ]
 
 
-def _mat4_to_trs(m: List[List[float]]) -> Tuple[List[float], List[float], List[float]]:
-    """Extract Translation, Rotation (Euler XYZ radians), Scale from 4x4 matrix.
-    
-    Note: This assumes no shear. For matrices with shear, results are approximate.
-    """
-    # Translation is the last column
-    position = [m[0][3], m[1][3], m[2][3]]
-    
-    # Scale is the length of each column (first 3 columns, first 3 rows)
-    sx = math.sqrt(m[0][0]**2 + m[1][0]**2 + m[2][0]**2)
-    sy = math.sqrt(m[0][1]**2 + m[1][1]**2 + m[2][1]**2)
-    sz = math.sqrt(m[0][2]**2 + m[1][2]**2 + m[2][2]**2)
-    scale = [sx, sy, sz]
-    
-    # Normalize rotation columns
-    if sx > 1e-8:
-        r00, r10, r20 = m[0][0] / sx, m[1][0] / sx, m[2][0] / sx
-    else:
-        r00, r10, r20 = 1.0, 0.0, 0.0
-    if sy > 1e-8:
-        r01, r11, r21 = m[0][1] / sy, m[1][1] / sy, m[2][1] / sy
-    else:
-        r01, r11, r21 = 0.0, 1.0, 0.0
-    if sz > 1e-8:
-        r02, r12, r22 = m[0][2] / sz, m[1][2] / sz, m[2][2] / sz
-    else:
-        r02, r12, r22 = 0.0, 0.0, 1.0
-    
-    # Extract Euler XYZ from rotation matrix
-    # Handle gimbal lock
-    if abs(r20) < 0.9999:
-        ry = math.asin(-r20)
-        rx = math.atan2(r21, r22)
-        rz = math.atan2(r10, r00)
-    else:
-        # Gimbal lock
-        rz = 0.0
-        if r20 < 0:  # ry = 90°
-            ry = math.pi / 2
-            rx = math.atan2(r01, r02)
-        else:  # ry = -90°
-            ry = -math.pi / 2
-            rx = math.atan2(-r01, -r02)
-    
-    rotation = [rx, ry, rz]
-    return position, rotation, scale
+# _mat4_to_trs lives in euler_conversion.py (Euler isolation — item 4).
+# Imported here so WorldMatrix._decompose and LocalTransform.from_matrix
+# can call it without knowing about the boundary module.
+from .euler_conversion import _mat4_to_trs  # noqa: F401  (re-used below)
 
 
 def _mat4_transform_point(m: List[List[float]], p: List[float]) -> List[float]:
@@ -156,40 +114,58 @@ def _mat4_transform_vector(m: List[List[float]], v: List[float]) -> List[float]:
 
 
 def _mat4_inverse(m: List[List[float]]) -> Optional[List[List[float]]]:
-    """Compute inverse of 4x4 matrix. Returns None if singular."""
-    # For TRS matrices, we can use the simpler inverse formula
-    # But for robustness, use general 4x4 inverse via cofactors
-    
-    # Flatten for easier indexing
-    def get(row: int, col: int) -> float:
-        return m[row][col]
-    
-    # Compute cofactors and determinant
-    # This is the standard 4x4 inverse algorithm
-    
-    a = get(0, 0); b = get(0, 1); c = get(0, 2); d = get(0, 3)
-    e = get(1, 0); f = get(1, 1); g = get(1, 2); h = get(1, 3)
-    i = get(2, 0); j = get(2, 1); k = get(2, 2); l = get(2, 3)
-    n = get(3, 0); o = get(3, 1); p = get(3, 2); q = get(3, 3)
-    
+    """Compute inverse of 4x4 matrix. Returns None if singular.
+
+    Fast path: affine TRS matrix (bottom row [0,0,0,1], uniform-ish scale).
+        R^-1 = R^T  (rotation is orthogonal)
+        t^-1 = -R^T @ t
+    Scale guard: if any column norm deviates from 1 by more than 1e-4 the
+    matrix carries non-unit scale; fall through to the full cofactor path.
+
+    Fallback: general 16-cofactor inverse for non-affine matrices.
+    """
+    # ── Affine fast-path ──────────────────────────────────────────────────
+    # Check bottom row is [0, 0, 0, 1]
+    if (abs(m[3][0]) < 1e-9 and abs(m[3][1]) < 1e-9 and
+            abs(m[3][2]) < 1e-9 and abs(m[3][3] - 1.0) < 1e-9):
+        # Column norms of the 3×3 rotation block
+        s0 = math.sqrt(m[0][0]**2 + m[1][0]**2 + m[2][0]**2)
+        s1 = math.sqrt(m[0][1]**2 + m[1][1]**2 + m[2][1]**2)
+        s2 = math.sqrt(m[0][2]**2 + m[1][2]**2 + m[2][2]**2)
+        if (abs(s0 - 1.0) < 1e-4 and abs(s1 - 1.0) < 1e-4 and
+                abs(s2 - 1.0) < 1e-4):
+            # Pure rotation + translation: inverse = R^T | -R^T·t
+            tx, ty, tz = m[0][3], m[1][3], m[2][3]
+            return [
+                [m[0][0], m[1][0], m[2][0], -(m[0][0]*tx + m[1][0]*ty + m[2][0]*tz)],
+                [m[0][1], m[1][1], m[2][1], -(m[0][1]*tx + m[1][1]*ty + m[2][1]*tz)],
+                [m[0][2], m[1][2], m[2][2], -(m[0][2]*tx + m[1][2]*ty + m[2][2]*tz)],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+
+    # ── General 16-cofactor fallback ──────────────────────────────────────
+    a = m[0][0]; b = m[0][1]; c = m[0][2]; d = m[0][3]
+    e = m[1][0]; f = m[1][1]; g = m[1][2]; h = m[1][3]
+    i = m[2][0]; j = m[2][1]; k = m[2][2]; l = m[2][3]
+    n = m[3][0]; o = m[3][1]; p = m[3][2]; q = m[3][3]
+
     kq_lp = k * q - l * p
     jq_lo = j * q - l * o
     jp_ko = j * p - k * o
     iq_ln = i * q - l * n
     ip_kn = i * p - k * n
     io_jn = i * o - j * n
-    
+
     det = (a * (f * kq_lp - g * jq_lo + h * jp_ko)
          - b * (e * kq_lp - g * iq_ln + h * ip_kn)
          + c * (e * jq_lo - f * iq_ln + h * io_jn)
          - d * (e * jp_ko - f * ip_kn + g * io_jn))
-    
+
     if abs(det) < 1e-12:
         return None
-    
+
     inv_det = 1.0 / det
-    
-    # Compute inverse matrix elements
+
     gq_hp = g * q - h * p
     fq_ho = f * q - h * o
     fp_go = f * p - g * o
@@ -202,8 +178,8 @@ def _mat4_inverse(m: List[List[float]]) -> Optional[List[List[float]]]:
     el_hi = e * l - h * i
     ek_gi = e * k - g * i
     ej_fi = e * j - f * i
-    
-    result = [
+
+    return [
         [
             (f * kq_lp - g * jq_lo + h * jp_ko) * inv_det,
             -(b * kq_lp - c * jq_lo + d * jp_ko) * inv_det,
@@ -229,8 +205,6 @@ def _mat4_inverse(m: List[List[float]]) -> Optional[List[List[float]]]:
             (a * fk_gj - b * ek_gi + c * ej_fi) * inv_det,
         ],
     ]
-    
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +424,12 @@ class NodeTransformState:
     # Lock state - once frozen, LOCAL transform cannot change
     # (world_matrix may still be recomputed if ancestors change)
     frozen: bool = False
+
+    # Set to True by set_local_transform() so callers can distinguish
+    # "Stage 4 has run" from "still at default identity" without relying
+    # on revision == 0 (which is also 0 for a ROOT node that legitimately
+    # has an identity transform and has never been mutated).
+    is_resolved: bool = False
     
     def set_local_transform(
         self,
@@ -470,6 +450,7 @@ class NodeTransformState:
             raise RuntimeError("Cannot modify frozen transform (use force=True for repair)")
         self.local_transform = transform
         self.revision += 1
+        self.is_resolved = True
         # Invalidate cached world (will be recomputed on next access)
         self.world_matrix = None
         self.parent_revision = -1
@@ -548,6 +529,7 @@ class NodeTransformState:
         d = {
             "local_transform": self.local_transform.to_dict(),
             "frozen": self.frozen,
+            "is_resolved": self.is_resolved,
             "revision": self.revision,
             "parent_revision": self.parent_revision,
         }
@@ -561,6 +543,7 @@ class NodeTransformState:
         state = cls(
             local_transform=LocalTransform.from_dict(d.get("local_transform", {})),
             frozen=d.get("frozen", False),
+            is_resolved=d.get("is_resolved", False),
             revision=d.get("revision", 0),
             parent_revision=d.get("parent_revision", -1),
         )

@@ -1356,6 +1356,65 @@
         }
       }
     },
+    "/api/settings/background-services": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get Background Services",
+        "operationId": "get_background_services_api_settings_background_services_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/background-services/{service_id}/toggle": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Toggle Background Service",
+        "operationId": "toggle_background_service_api_settings_background_services__service_id__toggle_post",
+        "parameters": [
+          {
+            "name": "service_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Service Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/finance/portfolio/import-file": {
       "post": {
         "tags": [
@@ -4090,6 +4149,146 @@
         }
       }
     },
+    "/api/blender/build": {
+      "post": {
+        "tags": [
+          "blender"
+        ],
+        "summary": "Build 3D Object",
+        "description": "Build a 3D object in Blender using progressive_v2 pipeline.\n\nThis is the ONLY build path:\nprogressive_v2 \u2192 recursive decomposition \u2192 per-node stages \u2192 Blender MCP \u2192 verification",
+        "operationId": "build_3d_object_api_blender_build_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlenderBuildRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/blender/primitive-readback": {
+      "get": {
+        "tags": [
+          "blender"
+        ],
+        "summary": "Primitive Readback Test",
+        "description": "Run primitive readback test to verify Blender's interpretation of parameters.\n\nCreates one of each primitive type with known parameters and reads back\nthe actual dimensions and bounding boxes. Use this to establish ground truth.",
+        "operationId": "primitive_readback_test_api_blender_primitive_readback_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/blender/verify-dimensions": {
+      "post": {
+        "tags": [
+          "blender"
+        ],
+        "summary": "Verify Object Dimensions",
+        "description": "Verify a built object's dimensions match expected spec.\n\nReads the actual dimensions from Blender and compares against expected values.",
+        "operationId": "verify_object_dimensions_api_blender_verify_dimensions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DimensionVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/blender/execute": {
+      "post": {
+        "tags": [
+          "blender"
+        ],
+        "summary": "Execute Blender Code",
+        "description": "Execute raw Blender Python code via MCP.\n\nFor testing and debugging only.",
+        "operationId": "execute_blender_code_api_blender_execute_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecuteCodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/dependency-plans": {
       "get": {
         "tags": [
@@ -4701,6 +4900,27 @@
         "type": "object",
         "title": "BatchHITLDecision"
       },
+      "BlenderBuildRequest": {
+        "properties": {
+          "description": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 3,
+            "title": "Description"
+          },
+          "use_llm_modifiers": {
+            "type": "boolean",
+            "title": "Use Llm Modifiers",
+            "description": "Use LLM for modifier intent",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "description"
+        ],
+        "title": "BlenderBuildRequest"
+      },
       "Body_import_demat_file_api_finance_portfolio_import_file_post": {
         "properties": {
           "file": {
@@ -4942,6 +5162,79 @@
           "file_path"
         ],
         "title": "DiagnoseFileRequest"
+      },
+      "DimensionVerifyRequest": {
+        "properties": {
+          "object_name": {
+            "type": "string",
+            "title": "Object Name",
+            "description": "Name of object in Blender to verify"
+          },
+          "expected_primitive": {
+            "type": "string",
+            "title": "Expected Primitive",
+            "description": "Expected primitive type"
+          },
+          "expected_size": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Size",
+            "description": "Expected size [x,y,z] for box"
+          },
+          "expected_radius": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Radius",
+            "description": "Expected radius for cylinder/sphere"
+          },
+          "expected_depth": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Depth",
+            "description": "Expected depth for cylinder/cone"
+          }
+        },
+        "type": "object",
+        "required": [
+          "object_name",
+          "expected_primitive"
+        ],
+        "title": "DimensionVerifyRequest"
+      },
+      "ExecuteCodeRequest": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "Blender Python code to execute"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "ExecuteCodeRequest"
       },
       "ExecutePlanRequest": {
         "properties": {

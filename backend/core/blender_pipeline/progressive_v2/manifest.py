@@ -52,6 +52,74 @@ def _builds_dir() -> Path:
     return _DATA_ROOT
 
 
+def prune_old_builds(
+    retention_days: int = 30,
+    *,
+    now: Optional[float] = None,
+    data_root: Optional[Any] = None,
+    max_failures_kept: int = 50,
+) -> Dict[str, List[str]]:
+    """Prune old successful builds by age and cap failure builds by count while retaining recent evidence."""
+    import shutil
+
+    root = Path(data_root) if data_root is not None else _builds_dir()
+    report: Dict[str, List[str]] = {
+        "removed": [],
+        "preserved_failures": [],
+        "preserved_recent": [],
+        "preserved_unknown": [],
+    }
+    cutoff = (time.time() if now is None else float(now)) - max(0, int(retention_days)) * 86400
+    successful = {CompletionStatus.SUCCESS.value, CompletionStatus.COMPLETED_DEGRADED.value}
+    
+    failure_entries: List[Tuple[Path, float]] = []
+
+    for directory in sorted((p for p in root.iterdir() if p.is_dir()), key=lambda p: p.name):
+        manifest_path = directory / "manifest.json"
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            status = str(payload.get("completion_status", payload.get("status", ""))).lower()
+        except (OSError, ValueError, TypeError):
+            report["preserved_unknown"].append(directory.name)
+            continue
+        try:
+            modified_at = manifest_path.stat().st_mtime
+        except OSError:
+            report["preserved_unknown"].append(directory.name)
+            continue
+
+        if status not in successful:
+            failure_entries.append((directory, modified_at))
+            continue
+
+        if modified_at >= cutoff:
+            report["preserved_recent"].append(directory.name)
+            continue
+        try:
+            shutil.rmtree(directory)
+            report["removed"].append(directory.name)
+            logger.info("Pruned expired successful build: %s", directory.name)
+        except OSError as exc:
+            report["preserved_unknown"].append(directory.name)
+            logger.warning("Failed to prune %s: %s", directory.name, exc)
+
+    # Cap failure builds: sort by mtime descending (newest first)
+    failure_entries.sort(key=lambda item: item[1], reverse=True)
+    for i, (f_dir, _) in enumerate(failure_entries):
+        if i < max_failures_kept:
+            report["preserved_failures"].append(f_dir.name)
+        else:
+            try:
+                shutil.rmtree(f_dir)
+                report["removed"].append(f_dir.name)
+                logger.info("Pruned excess failed build (cap=%d): %s", max_failures_kept, f_dir.name)
+            except OSError as exc:
+                report["preserved_unknown"].append(f_dir.name)
+                logger.warning("Failed to prune excess failure %s: %s", f_dir.name, exc)
+
+    return report
+
+
 # ---------------------------------------------------------------------------
 # Node State Machine — Blueprint §8
 # ---------------------------------------------------------------------------
@@ -107,6 +175,41 @@ class CompletionStatus(str, Enum):
     SUCCESS = "success"
     COMPLETED_DEGRADED = "completed_degraded"
     FAILED = "failed"
+    PLANNED_ONLY = "planned_only"     # Build ran in sim mode (no Blender MCP involved)
+    COMMITTED_UNVERIFIED = "committed_unverified"  # Blender ran but readback didn't complete
+
+
+@dataclass(frozen=True)
+class BuildOutcome:
+    """The single authoritative result of a V2 build."""
+
+    status: CompletionStatus
+    verification_levels_run: List[str] = field(default_factory=list)
+    levels_passed: Dict[str, bool] = field(default_factory=dict)
+    defects: List[Dict[str, Any]] = field(default_factory=list)
+    attempt_id: Optional[str] = None
+    evidence_paths: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "status": self.status.value,
+            "verification_levels_run": list(self.verification_levels_run),
+            "levels_passed": dict(self.levels_passed),
+            "defects": list(self.defects),
+            "attempt_id": self.attempt_id,
+            "evidence_paths": list(self.evidence_paths),
+        }
+
+    @classmethod
+    def from_dict(cls, value: Dict[str, Any]) -> "BuildOutcome":
+        return cls(
+            status=CompletionStatus(value["status"]),
+            verification_levels_run=list(value.get("verification_levels_run", [])),
+            levels_passed=dict(value.get("levels_passed", {})),
+            defects=list(value.get("defects", [])),
+            attempt_id=value.get("attempt_id"),
+            evidence_paths=list(value.get("evidence_paths", [])),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +238,7 @@ class GeometrySpec:
     # For imported/referenced geometry
     source_path: Optional[str] = None
     source_object: Optional[str] = None
+    normalization_events: List[Dict[str, Any]] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
         d = {"primitive": self.primitive.value}
@@ -148,13 +252,32 @@ class GeometrySpec:
         if self.minor_radius is not None: d["minor_radius"] = self.minor_radius
         if self.source_path: d["source_path"] = self.source_path
         if self.source_object: d["source_object"] = self.source_object
+        if self.normalization_events: d["normalization_events"] = self.normalization_events
         return d
     
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> GeometrySpec:
+        primitive = PrimitiveType(d.get("primitive", "box"))
+        size = d.get("size")
+        events = list(d.get("normalization_events") or [])
+        if primitive == PrimitiveType.PLANE and isinstance(size, (list, tuple)) and len(size) == 2:
+            got = [float(size[0]), float(size[1])]
+            try:
+                thickness = float(d.get("depth", 0.002))
+            except (TypeError, ValueError):
+                thickness = 0.002
+            if thickness <= 0:
+                thickness = 0.002
+            size = [got[0], got[1], thickness]
+            events.append({
+                "field": "size",
+                "rule": "plane_xy_to_thin_panel",
+                "got": got,
+                "normalized": list(size),
+            })
         return cls(
-            primitive=PrimitiveType(d.get("primitive", "box")),
-            size=d.get("size"),
+            primitive=primitive,
+            size=size,
             radius=d.get("radius"),
             radius2=d.get("radius2"),
             depth=d.get("depth"),
@@ -164,6 +287,7 @@ class GeometrySpec:
             minor_radius=d.get("minor_radius"),
             source_path=d.get("source_path"),
             source_object=d.get("source_object"),
+            normalization_events=events,
         )
 
 
@@ -199,6 +323,7 @@ class MaterialSpec:
     # Subsurface
     subsurface: float = 0.0
     subsurface_color: Optional[List[float]] = None
+    subsurface_radius: List[float] = field(default_factory=lambda: [1.0, 0.2, 0.1])
     
     # Clearcoat
     clearcoat: float = 0.0
@@ -210,10 +335,19 @@ class MaterialSpec:
     
     # Specular
     specular: float = 0.5
+    specular_tint: float = 0.0
+    anisotropy: float = 0.0
+    normal_strength: float = 1.0
+
+    # Opacity.  Kept in the scene plan rather than inferred by the executor.
+    alpha: float = 1.0
+    blend_mode: str = "opaque"
     
     # Advanced
     use_nodes: bool = True
     node_tree_name: Optional[str] = None  # Reference to shared node tree
+    procedural_texture: Optional[str] = None
+    procedural_params: Dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
         d = {
@@ -223,14 +357,23 @@ class MaterialSpec:
             "transmission": self.transmission,
             "ior": self.ior,
             "subsurface": self.subsurface,
+            "subsurface_radius": self.subsurface_radius,
             "clearcoat": self.clearcoat,
             "clearcoat_roughness": self.clearcoat_roughness,
             "sheen": self.sheen,
             "sheen_tint": self.sheen_tint,
             "specular": self.specular,
+            "specular_tint": self.specular_tint,
+            "anisotropy": self.anisotropy,
+            "normal_strength": self.normal_strength,
+            "alpha": self.alpha,
+            "blend_mode": self.blend_mode,
         }
         if self.name: d["name"] = self.name
         if self.preset: d["preset"] = self.preset
+        if self.procedural_texture:
+            d["procedural_texture"] = self.procedural_texture
+            d["procedural_params"] = self.procedural_params
         if self.emission_color: 
             d["emission_color"] = self.emission_color
             d["emission_strength"] = self.emission_strength
@@ -253,12 +396,20 @@ class MaterialSpec:
             ior=d.get("ior", 1.45),
             subsurface=d.get("subsurface", 0.0),
             subsurface_color=d.get("subsurface_color"),
+            subsurface_radius=d.get("subsurface_radius", [1.0, 0.2, 0.1]),
             clearcoat=d.get("clearcoat", 0.0),
             clearcoat_roughness=d.get("clearcoat_roughness", 0.03),
             sheen=d.get("sheen", 0.0),
             sheen_tint=d.get("sheen_tint", 0.5),
             specular=d.get("specular", 0.5),
+            specular_tint=d.get("specular_tint", 0.0),
+            anisotropy=d.get("anisotropy", 0.0),
+            normal_strength=d.get("normal_strength", 1.0),
+            alpha=d.get("alpha", 1.0),
+            blend_mode=d.get("blend_mode", "opaque"),
             node_tree_name=d.get("node_tree_name"),
+            procedural_texture=d.get("procedural_texture"),
+            procedural_params=dict(d.get("procedural_params", {})),
         )
     
     @classmethod
@@ -285,6 +436,11 @@ class MaterialSpec:
             sheen=preset.sheen,
             sheen_tint=preset.sheen_tint,
             specular=preset.specular,
+            specular_tint=preset.specular_tint,
+            anisotropy=getattr(preset, "anisotropy", 0.0),
+            alpha=preset.alpha,
+            procedural_texture=getattr(preset, "procedural_texture", None),
+            procedural_params=dict(getattr(preset, "procedural_params", {})),
         )
 
 
@@ -304,6 +460,13 @@ class AttachmentSpec:
     # Computed transform (filled by Stage 4)
     local_offset: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     local_rotation: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
+
+    # Stable attachment reference.  Labels remain useful for display and old
+    # manifests, but new planning code must prefer a node id plus an anchor.
+    # This keeps placement unambiguous when common labels recur in different
+    # subassemblies.
+    reference_node_id: Optional[str] = None
+    reference_anchor: Optional[str] = None
     
     # Semantic hints (filled by Stage 3, used by Stage 4)
     # For CORNER
@@ -348,6 +511,9 @@ class AttachmentSpec:
     # For INSET
     inset_face: Optional[str] = None
     inset_depth: float = 0.0
+    # Explicit exception to the default connectivity requirement (for example
+    # a deliberately suspended element or declared hinge clearance).
+    allow_disconnected: bool = False
     
     def to_dict(self) -> Dict[str, Any]:
         d = {
@@ -359,7 +525,8 @@ class AttachmentSpec:
         for attr in ["corner_position", "edge_position", "pierce_direction", 
                      "height_hint", "array_axis", "spacing_hint", "connects_to",
                      "face_position", "cut_face", "inset_face", "position_fraction",
-                     "relative_to", "direction", "gap", "align"]:
+                     "relative_to", "direction", "gap", "align", "reference_node_id",
+                     "reference_anchor"]:
             val = getattr(self, attr)
             if val is not None:
                 d[attr] = val
@@ -371,6 +538,8 @@ class AttachmentSpec:
             val = getattr(self, attr)
             if val is not None:
                 d[attr] = val
+        if self.allow_disconnected:
+            d["allow_disconnected"] = True
         return d
     
     @classmethod
@@ -379,6 +548,8 @@ class AttachmentSpec:
             socket_type=SocketType(d.get("socket_type", "ROOT")),
             local_offset=d.get("local_offset", [0.0, 0.0, 0.0]),
             local_rotation=d.get("local_rotation", [0.0, 0.0, 0.0]),
+            reference_node_id=d.get("reference_node_id"),
+            reference_anchor=d.get("reference_anchor"),
             corner_position=d.get("corner_position"),
             edge_position=d.get("edge_position"),
             edge_offset=d.get("edge_offset", 0.0),
@@ -400,6 +571,7 @@ class AttachmentSpec:
             cut_face=d.get("cut_face"),
             inset_face=d.get("inset_face"),
             inset_depth=d.get("inset_depth", 0.0),
+            allow_disconnected=bool(d.get("allow_disconnected", False)),
         )
 
 
@@ -443,6 +615,11 @@ class ManifestNode:
     
     # Hierarchy metadata
     hierarchy_depth: int = 0
+
+    # Set before committing a decomposition batch.  A non-zero expectation is
+    # an integrity contract: this node must never later be accepted as an empty
+    # leaf assembly.
+    expected_child_count: Optional[int] = None
     
     # Geometry specification (for PART nodes)
     geometry: Optional[GeometrySpec] = None
@@ -544,6 +721,7 @@ class ManifestNode:
             "children_ids": list(self.children_ids),
             "dependency_ids": list(self.dependency_ids),
             "hierarchy_depth": self.hierarchy_depth,
+            "expected_child_count": self.expected_child_count,
             "retry_count": self.retry_count,
             "max_retries": self.max_retries,
             "blender_objects": list(self.blender_objects),
@@ -563,10 +741,17 @@ class ManifestNode:
         if self.bounding_box: d["bounding_box"] = self.bounding_box
         if self.world_position: d["world_position"] = self.world_position
         if self.world_rotation: d["world_rotation"] = self.world_rotation
-        # NEW: Serialize transform state
-        d["transform_state"] = self.transform_state.to_dict()
+        # A controller reset must retain a transform-state object.  Be
+        # defensive when loading/rescuing manifests produced by older repair
+        # code that temporarily wrote None, so failure persistence itself can
+        # never be blocked by an AttributeError.
+        d["transform_state"] = (
+            self.transform_state.to_dict()
+            if self.transform_state is not None
+            else NodeTransformState().to_dict()
+        )
         if self.public_sockets: d["public_sockets"] = self.public_sockets
-        if self.modifiers: d["modifiers"] = self.modifiers
+        if self.modifiers: d["modifiers"] = [m.to_dict() if hasattr(m, "to_dict") else m for m in self.modifiers]
         if self.constraints: d["constraints"] = self.constraints
         if self.animation_data: d["animation_data"] = self.animation_data
         if self.physics_settings: d["physics_settings"] = self.physics_settings
@@ -594,6 +779,7 @@ class ManifestNode:
             error_message=d.get("error_message"),
             error_stage=d.get("error_stage"),
             hierarchy_depth=d.get("hierarchy_depth", 0),
+            expected_child_count=d.get("expected_child_count"),
             stage_outputs=dict(d.get("stage_outputs", {})),
             verification_result=d.get("verification_result"),
             blender_objects=list(d.get("blender_objects", [])),
@@ -646,9 +832,12 @@ class BuildManifest:
         self.root_node_id: str = root_node_id or ""
         self.nodes: Dict[str, ManifestNode] = {}
         self.completion_status: CompletionStatus = CompletionStatus.IN_PROGRESS
+        self.outcome: Optional[BuildOutcome] = None
         self.created_at: str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         self.updated_at: str = self.created_at
         self.checkpoints: List[Dict[str, Any]] = []
+        # Append-only audit trail; error_message only retains the latest error.
+        self.events: List[Dict[str, Any]] = []
         
         # Original prompt
         self.prompt: str = ""
@@ -712,10 +901,26 @@ class BuildManifest:
         return self.get_node(self.root_node_id)
     
     def get_node_by_label(self, label: str) -> Optional[ManifestNode]:
-        """Find a node by its label (returns first match or None)."""
+        """Find a node by its label (exact match first, then token overlap match)."""
+        if not label:
+            return None
+        target = label.strip().lower()
+        # 1. Exact match
         for node in self.nodes.values():
-            if node.label == label:
+            if node.label.lower() == target:
                 return node
+        # 2. Token overlap fallback for descriptive synonyms (e.g. cylindrical_arm -> horizontal_arm)
+        target_tokens = set(target.replace("-", "_").split("_")) - {"part", "mesh", "object", "node", "assembly"}
+        best_node = None
+        best_overlap = 0
+        for node in self.nodes.values():
+            node_tokens = set(node.label.lower().replace("-", "_").split("_")) - {"part", "mesh", "object", "node", "assembly"}
+            overlap = len(target_tokens & node_tokens)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_node = node
+        if best_overlap > 0:
+            return best_node
         return None
     
     def has_node(self, node_id: str) -> bool:
@@ -763,16 +968,48 @@ class BuildManifest:
         node.state = new_state
         if error is not None:
             node.error_message = error
+        elif new_state == NodeState.VERIFIED:
+            # Keep failures in the append-only event trail, but do not expose
+            # a stale retry error as the current state of a healthy node.
+            node.error_message = None
+            node.error_stage = None
         if error_stage is not None:
             node.error_stage = error_stage
         if new_state == NodeState.RETRYING:
             node.retry_count += 1
+
+        self.record_event(
+            "state_transition",
+            node_id=node_id,
+            details={
+                "from": old_state.value,
+                "to": new_state.value,
+                "error": error,
+                "error_stage": error_stage,
+            },
+        )
         
         self._touch()
         logger.debug(
             f"[{self.model_id}] {node.label}: {old_state.value} → {new_state.value}"
             + (f" (error: {error})" if error else "")
         )
+
+    def record_event(
+        self,
+        event_type: str,
+        *,
+        node_id: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Append a durable, JSON-safe build event for later diagnosis."""
+        self.events.append({
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "type": event_type,
+            "node_id": node_id,
+            "details": details or {},
+        })
+        self._touch()
     
     def can_retry(self, node_id: str) -> bool:
         """Check if a node can be retried."""
@@ -878,15 +1115,33 @@ class BuildManifest:
         )
     
     def all_children_done(self, node_id: str) -> bool:
-        """Check if all children are in terminal state (VERIFIED or SKIPPED)."""
+        """Check if all children are in a terminal state.
+
+        Terminal states: VERIFIED, SKIPPED, FAILED.
+        A child in FAILED state is done regardless of importance — the
+        *parent* decides how to handle failures (required vs optional split)
+        in _process_assembly, not here.
+        """
         node = self.get_node(node_id)
         if not node.children_ids:
             return False
+        _TERMINAL = (NodeState.VERIFIED, NodeState.SKIPPED, NodeState.FAILED)
         return all(
-            self.nodes[cid].state in (NodeState.VERIFIED, NodeState.SKIPPED)
+            self.nodes[cid].state in _TERMINAL
             for cid in node.children_ids
             if cid in self.nodes
         )
+    
+    def failed_required_children(self, node_id: str) -> List[str]:
+        """Return labels of REQUIRED children in FAILED or SKIPPED state."""
+        node = self.get_node(node_id)
+        result = []
+        for cid in node.children_ids:
+            child = self.nodes.get(cid)
+            if child and child.importance == NodeImportance.REQUIRED:
+                if child.state in (NodeState.FAILED, NodeState.SKIPPED):
+                    result.append(child.label)
+        return result
     
     def is_root_resolved(self) -> bool:
         """True if root is VERIFIED - build complete."""
@@ -935,6 +1190,7 @@ class BuildManifest:
         geometry: Optional[GeometrySpec] = None,
         material: Optional[MaterialSpec] = None,
         stage_outputs: Optional[Dict[str, Any]] = None,
+        custom_props: Optional[Dict[str, Any]] = None,
     ) -> ManifestNode:
         """Create and add a child node under parent_id.
         
@@ -955,6 +1211,7 @@ class BuildManifest:
             importance=importance,
             parent_id=parent_id,
             hierarchy_depth=parent.hierarchy_depth + 1,
+            custom_props=dict(custom_props or {}),
             dependency_ids=list(dependency_ids or []),
             attachment=attachment or AttachmentSpec(),
             geometry=geometry,
@@ -972,6 +1229,162 @@ class BuildManifest:
         )
         return child
     
+    def commit_decomposition(
+        self,
+        parent_id: str,
+        children_specs: List[Dict[str, Any]],
+    ) -> List[ManifestNode]:
+        """Atomically validate and commit a set of child nodes under parent_id.
+
+        Validates the entire candidate list before writing anything to the
+        manifest.  If any check fails, the manifest is left completely
+        unchanged and a ValueError is raised with a descriptive message.
+
+        Checks performed (in order):
+        1. parent_id exists.
+        2. No label collision with any node already in the manifest.
+        3. No duplicate labels within the candidate list itself.
+        4. Exactly one child carries socket_type == "ROOT" (or the string
+           equivalent stored in the spec's attachment).
+        5. No candidate references a parent_id that would create a cycle
+           (all candidates are children of the same parent, so a cycle is
+           only possible if a candidate's label matches an ancestor label —
+           checked as a lightweight guard).
+
+        Each spec dict must have the same shape that add_child_node accepts:
+            {
+                "label": str,
+                "kind": NodeKind,
+                "importance": NodeImportance,          # optional
+                "attachment": AttachmentSpec,           # optional
+                "geometry": GeometrySpec | None,        # optional
+                "stage_outputs": dict,                  # optional
+            }
+
+        Returns the list of created ManifestNode objects in the same order
+        as children_specs.
+        """
+        # ── 1. Parent must exist ──────────────────────────────────────────
+        parent = self.get_node(parent_id)  # raises KeyError if missing
+
+        # ── 2 & 3. Label collision checks ────────────────────────────────
+        existing_labels: Set[str] = {n.label for n in self.nodes.values()}
+        ancestor_labels: Set[str] = set()
+        cur = parent_id
+        while cur:
+            n = self.nodes.get(cur)
+            if n is None:
+                break
+            ancestor_labels.add(n.label)
+            cur = n.parent_id
+
+        candidate_labels: List[str] = []
+        for i, spec in enumerate(children_specs):
+            lbl = spec.get("label", "")
+            if not lbl:
+                raise ValueError(f"commit_decomposition: spec[{i}] missing label")
+            if lbl in existing_labels:
+                raise ValueError(
+                    f"commit_decomposition: label '{lbl}' already exists in manifest"
+                )
+            if lbl in candidate_labels:
+                raise ValueError(
+                    f"commit_decomposition: duplicate label '{lbl}' in candidate list"
+                )
+            if lbl in ancestor_labels:
+                raise ValueError(
+                    f"commit_decomposition: label '{lbl}' matches an ancestor — "
+                    f"would create a cycle"
+                )
+            candidate_labels.append(lbl)
+
+        # ── 4. Anchor / ROOT invariant ────────────────────────────────
+        def _get_spec_socket(spec: dict):
+            if spec.get("attachment") is not None:
+                st = getattr(spec["attachment"], "socket_type", None)
+                if isinstance(st, SocketType):
+                    return st
+                if isinstance(st, str):
+                    try:
+                        return SocketType(st)
+                    except Exception:
+                        pass
+            if spec.get("socket_type") is not None:
+                st = spec["socket_type"]
+                if isinstance(st, SocketType):
+                    return st
+                if isinstance(st, str):
+                    try:
+                        return SocketType(st)
+                    except Exception:
+                        pass
+            return None
+
+        root_count = sum(
+            1 for spec in children_specs
+            if _get_spec_socket(spec) == SocketType.ROOT
+        )
+        _FRAME_RELATIVE_SOCKETS = {
+            SocketType.CORNER,
+            SocketType.RADIAL,
+            SocketType.ARRAY_MEMBER,
+            SocketType.RADIAL_BRIDGE,
+        }
+        all_frame_anchored = (
+            len(children_specs) > 0 and
+            all(
+                _get_spec_socket(spec) in _FRAME_RELATIVE_SOCKETS
+                for spec in children_specs
+            )
+        )
+        if root_count == 0 and not all_frame_anchored:
+            raise ValueError(
+                f"commit_decomposition: no ROOT child in candidate list for "
+                f"parent '{parent.label}' — assembly would be unbuildable"
+            )
+        if root_count > 1:
+            raise ValueError(
+                f"commit_decomposition: {root_count} ROOT children in candidate "
+                f"list for parent '{parent.label}' — exactly one is required"
+            )
+
+        # ── All checks passed — commit atomically ─────────────────────────
+        created: List[ManifestNode] = []
+        for spec in children_specs:
+            att = spec.get("attachment")
+            if att is None and "socket_type" in spec:
+                st = spec["socket_type"]
+                if isinstance(st, str):
+                    st = SocketType(st)
+                att = AttachmentSpec(socket_type=st)
+            node = self.add_child_node(
+                parent_id=parent_id,
+                label=spec["label"],
+                kind=spec["kind"],
+                importance=spec.get("importance", NodeImportance.REQUIRED),
+                attachment=att,
+                geometry=spec.get("geometry"),
+                stage_outputs=spec.get("stage_outputs"),
+                custom_props=spec.get("custom_props"),
+            )
+            created.append(node)
+
+        self.record_event(
+            "decomposition_committed",
+            node_id=parent_id,
+            details={
+                "expected_child_count": parent.expected_child_count,
+                "committed_child_count": len(created),
+                "child_ids": [node.node_id for node in created],
+            },
+        )
+
+        logger.debug(
+            f"[{self.model_id}] commit_decomposition: "
+            f"{len(created)} nodes committed under '{parent.label}'"
+        )
+        return created
+
     def remove_subtree(self, node_id: str) -> List[str]:
         """Remove a node and all descendants. Returns removed IDs."""
         if node_id == self.root_node_id:
@@ -1100,6 +1513,7 @@ class BuildManifest:
             "prompt": self.prompt,
             "root_node_id": self.root_node_id,
             "completion_status": self.completion_status.value,
+            "outcome": self.outcome.to_dict() if self.outcome else None,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "stage0_output": self.stage0_output,
@@ -1107,6 +1521,7 @@ class BuildManifest:
             "definitions": self.definitions,
             "materials": {k: v.to_dict() for k, v in self.materials.items()},
             "checkpoints": self.checkpoints,
+            "events": self.events,
             "stats": self.stats,
         }
     
@@ -1120,10 +1535,13 @@ class BuildManifest:
         )
         m.prompt = d.get("prompt", "")
         m.completion_status = CompletionStatus(d.get("completion_status", "in_progress"))
+        raw_outcome = d.get("outcome")
+        m.outcome = BuildOutcome.from_dict(raw_outcome) if isinstance(raw_outcome, dict) else None
         m.created_at = d.get("created_at", "")
         m.updated_at = d.get("updated_at", "")
         m.stage0_output = d.get("stage0_output")
         m.checkpoints = list(d.get("checkpoints", []))
+        m.events = list(d.get("events", []))
         m.definitions = dict(d.get("definitions", {}))
         m.stats = dict(d.get("stats", {}))
         
@@ -1144,6 +1562,49 @@ class BuildManifest:
         tmp.replace(target)
         logger.debug(f"Manifest saved: {target}")
         return target
+
+    def append_llm_log(
+        self,
+        node_label: str,
+        prompt: str,
+        response: str,
+        warnings: Optional[List[Any]] = None,
+    ) -> None:
+        """Append one LLM call record to llm_log.json for this build.
+
+        Each record captures the raw prompt, raw response, and any
+        ValidationWarnings produced during parsing — the three data
+        trails identified as missing in the data-collection audit.
+        Appends rather than rewrites so a crash mid-build still leaves
+        all prior calls intact.
+        """
+        log_path = self._build_dir() / "llm_log.json"
+        record = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "node": node_label,
+            "prompt": prompt,
+            "response": response,
+            "warnings": [
+                {
+                    "field": w.field,
+                    "requested": w.requested,
+                    "coerced_to": w.coerced_to,
+                    "reason": w.reason,
+                }
+                for w in (warnings or [])
+            ],
+        }
+        # Read-modify-write with atomic replace so partial writes don't corrupt.
+        existing: List[Any] = []
+        if log_path.exists():
+            try:
+                existing = json.loads(log_path.read_text(encoding="utf-8"))
+            except Exception:
+                existing = []
+        existing.append(record)
+        tmp = log_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(log_path)
     
     @classmethod
     def load(cls, path: Path) -> BuildManifest:
@@ -1199,10 +1660,11 @@ class BuildManifest:
         """Increment Blender operation counter."""
         self.stats["total_blender_ops"] = self.stats.get("total_blender_ops", 0) + 1
     
-    def finalize(self) -> None:
-        """Mark build as complete and record end time."""
+    def finalize(self, outcome: BuildOutcome) -> None:
+        """Persist the controller-computed outcome without recomputing it."""
         self.stats["build_end_time"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        self.completion_status = self.compute_completion_status()
+        self.outcome = outcome
+        self.completion_status = outcome.status
         self.save()
     
     # ── Debug ────────────────────────────────────────────────────────────

@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 from .manifest import BuildManifest, ManifestNode, NodeState
 from .node_types import NodeKind, NodeImportance
 from .hierarchy import ContainmentTree, HierarchyError
-from ..stage1_topology import Stage1Topology, Stage1Error
+from ..legacy_stages.stage1_topology import Stage1Topology, Stage1Error
 
 logger = logging.getLogger(__name__)
 

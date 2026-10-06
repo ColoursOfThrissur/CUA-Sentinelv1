@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from .manifest import BuildManifest, ManifestNode, NodeState
 from .node_types import NodeKind
-from ..executor import (
+from ..legacy_v4.executor_v4 import (
     _execute_blender_op,
     _create_generation_collection,
     _rollback_generation,

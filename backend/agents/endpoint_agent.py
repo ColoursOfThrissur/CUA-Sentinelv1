@@ -184,6 +184,10 @@ class EndpointAgent(BaseAgent):
         model_id = self.model_manager.get_model_for_workflow("ENDPOINT")
         step_id = self.create_step(task_id, 0, "DIRECT_CHAT", "Direct chat response")
         self.update_step_status(step_id, "RUNNING")
+        _blender_build_error = None
+        _blender_result = None
+        _blender_warning = None
+        _blender_exception = None
 
         try:
             # Check for direct Desktop file creation request
@@ -916,17 +920,20 @@ class EndpointAgent(BaseAgent):
             )
             if _is_primitive_plan:
                 try:
-                    from core.blender_pipeline.progressive_v2 import run_progressive_build, HierarchyLimits
+                    from core.blender_pipeline.progressive_v2 import HierarchyLimits, run_progressive_build
                     mcp_mgr = getattr(self, "_mcp_manager", None)
-                    logger.info(f"[task={task_id}] Re-routing primitive plan through progressive_v2 pipeline")
+                    logger.info(f"[task={task_id}] Re-routing primitive plan through primary V2 pipeline")
                     _staged_result = await run_progressive_build(
                         prompt=prompt,
                         model_manager=self.model_manager,
                         task_id=task_id,
                         mcp_manager=mcp_mgr,
-                        limits=HierarchyLimits(max_depth=6, max_children=20, max_total_nodes=200),
+                        limits=HierarchyLimits(max_depth=60, max_children=200, max_total_nodes=2000),
                     )
-                    if _staged_result.success:
+                    from core.blender_pipeline.progressive_v2.outcome_policy import TaskDisposition, task_disposition
+                    _blender_result = _staged_result
+                    _staged_disposition = task_disposition(_staged_result.completion_status)
+                    if _staged_disposition is not TaskDisposition.NOT_DONE:
                         _prim_result_entry = ("blender:build_spec", {"data": {
                             "ok": True,
                             "status": _staged_result.completion_status.value,
@@ -945,17 +952,28 @@ class EndpointAgent(BaseAgent):
                             f"[task={task_id}] Progressive pipeline succeeded: "
                             f"{_staged_result.verified_nodes} nodes verified"
                         )
+                        if _staged_disposition is TaskDisposition.DONE_WITH_WARNINGS:
+                            _blender_warning = "; ".join(_staged_result.errors) or "Verification warnings"
                     else:
+                        _blender_build_error = "; ".join(_staged_result.errors) or "Blender build failed"
                         logger.warning(
-                            f"[task={task_id}] Progressive pipeline failed: {_staged_result.errors}, "
-                            f"falling back to direct primitive execution"
+                            f"[task={task_id}] Progressive pipeline failed: {_staged_result.errors}"
                         )
-                        # Fall through to execute primitives directly
+                        # A second, unverified primitive path would spend more
+                        # calls and could leave a partial model after V3 rejects
+                        # the design. Surface the real failure instead.
+                        executed_tool_results = [("blender:build_spec", {"data": _staged_result.to_dict()})]
+                        executed_summaries = [f"❌ `blender:build_spec`: {', '.join(_staged_result.errors[:2])}"]
+                        steps_to_execute = []
                 except Exception as _sp_err:
+                    _blender_exception = _sp_err
+                    _blender_build_error = str(_sp_err)
                     logger.warning(
-                        f"[task={task_id}] Progressive pipeline error ({_sp_err}), "
-                        f"falling back to direct primitive execution"
+                        f"[task={task_id}] Progressive pipeline error: {_sp_err}"
                     )
+                    executed_tool_results = []
+                    executed_summaries = [f"❌ Progressive build error: {_sp_err}"]
+                    steps_to_execute = []
 
             # Execute extracted steps
             if steps_to_execute:
@@ -970,7 +988,7 @@ class EndpointAgent(BaseAgent):
                     # Route through single progressive build with original prompt
                     logger.info(f"[task={task_id}] Routing multi-step Blender plan through single progressive build")
                     try:
-                        from core.blender_pipeline.progressive_v2 import run_progressive_build, HierarchyLimits
+                        from core.blender_pipeline.progressive_v2 import HierarchyLimits, run_progressive_build
                         mcp_mgr = getattr(self, "_mcp_manager", None)
                         
                         _prog_result = await run_progressive_build(
@@ -978,26 +996,44 @@ class EndpointAgent(BaseAgent):
                             model_manager=self.model_manager,
                             task_id=task_id,
                             mcp_manager=mcp_mgr,
-                            limits=HierarchyLimits(max_depth=3, max_children=10, max_total_nodes=30),
+                            limits=HierarchyLimits(max_depth=60, max_children=200, max_total_nodes=2000),
                         )
+                        from core.blender_pipeline.progressive_v2.outcome_policy import TaskDisposition, task_disposition
+                        _blender_result = _prog_result
+                        _prog_disposition = task_disposition(_prog_result.completion_status)
                         
                         # Build result and skip the original steps
                         executed_tool_results = [("blender:build_spec", {"data": _prog_result.to_dict()})]
-                        if _prog_result.success:
+                        if _prog_disposition is not TaskDisposition.NOT_DONE:
                             executed_summaries = [
                                 f"✅ `blender:build_spec`: Built {_prog_result.verified_nodes}/{_prog_result.total_nodes} parts, "
                                 f"status={_prog_result.completion_status.value}"
                             ]
                         else:
+                            _blender_build_error = "; ".join(_prog_result.errors) or "Blender build failed"
                             executed_summaries = [
                                 f"⚠️ `blender:build_spec`: {_prog_result.completion_status.value} - {', '.join(_prog_result.errors[:2])}"
                             ]
                         
                         # Skip to post-execution (don't run the LLM's individual steps)
                         steps_to_execute = []  
-                        logger.info(f"[task={task_id}] Progressive build complete: {_prog_result.verified_nodes} nodes verified")
+                        if _prog_disposition is not TaskDisposition.NOT_DONE:
+                            logger.info(
+                                f"[task={task_id}] Progressive build complete: "
+                                f"{_prog_result.verified_nodes} nodes verified"
+                            )
+                        else:
+                            logger.warning(
+                                f"[task={task_id}] Progressive build rejected: "
+                                f"status={_prog_result.completion_status.value}; "
+                                f"errors={'; '.join(_prog_result.errors[:2])}"
+                            )
+                        if _prog_disposition is TaskDisposition.DONE_WITH_WARNINGS:
+                            _blender_warning = "; ".join(_prog_result.errors) or "Verification warnings"
                         
                     except Exception as _pb_err:
+                        _blender_exception = _pb_err
+                        _blender_build_error = str(_pb_err)
                         logger.error(f"[task={task_id}] Progressive build failed: {_pb_err}")
                         executed_summaries = [f"❌ Progressive build error: {_pb_err}"]
                         executed_tool_results = []
@@ -1256,7 +1292,8 @@ class EndpointAgent(BaseAgent):
                     # Check verification status from build results
                     _verification_passed = True
                     _spatial_errors = []
-                    _completion_status = "SUCCESS"
+                    from core.blender_pipeline.progressive_v2.outcome_policy import TaskDisposition, task_disposition
+                    _completion_status = None
                     for _, r in executed_tool_results:
                         d = r.get("data") or {}
                         if d.get("spatial_verification_failed"):
@@ -1274,14 +1311,15 @@ class EndpointAgent(BaseAgent):
                     if _is_build_spec:
                         # CRITICAL: Synthesis prompt MUST branch on verification outcome
                         # Do NOT always say "confident" - that's the BUILT_WITH_WARNINGS bug
-                        if _verification_passed and _completion_status == "SUCCESS":
+                        _disposition = task_disposition(_completion_status)
+                        if _verification_passed and _disposition is TaskDisposition.DONE:
                             _synth_instructions = (
                                 "Write a clear, confident response confirming the 3D model was built and loaded successfully. "
                                 "Mention the model name, polygon count, and that verification passed. "
                                 "End your response with exactly one line in this format: 'build_id: <the_actual_build_id_value>'. "
                                 "Do NOT output raw JSON blocks. Do NOT write 'save as approved' in your response."
                             )
-                        elif _completion_status == "COMPLETED_DEGRADED" or _spatial_errors:
+                        elif _disposition is TaskDisposition.DONE_WITH_WARNINGS or _spatial_errors:
                             _spatial_warning = "; ".join(_spatial_errors[:3]) if _spatial_errors else "spatial verification issues detected"
                             _synth_instructions = (
                                 f"Write a response indicating the 3D model was built but has SPATIAL ISSUES that need attention. "
@@ -1350,6 +1388,16 @@ class EndpointAgent(BaseAgent):
                 elif executed_summaries:
                     response += "\n\n**Actions Executed in Blender / Connected App:**\n" + "\n".join(f"- {s}" for s in executed_summaries)
 
+            if _blender_build_error:
+                response = f"3D model build failed: {_blender_build_error}. No model was verified."
+            elif _blender_warning:
+                _defect_messages = [
+                    str(defect.get("message", defect))
+                    for defect in ((_blender_result.outcome.defects if _blender_result and _blender_result.outcome else []))
+                ]
+                _defect_suffix = f" Defects: {'; '.join(_defect_messages)}." if _defect_messages else ""
+                response = f"3D model built with warnings: {_blender_warning}.{_defect_suffix} Inspect it in Blender before relying on it."
+
             # Record Episodic Memory JSON log
             try:
                 from core.memory_layers import memory_layers
@@ -1373,15 +1421,40 @@ class EndpointAgent(BaseAgent):
                 step_id=step_id,
                 metadata={"kind": "endpoint_chat", "used_web": bool(web_context), "has_market_quote": bool(ticker_symbol)},
             )
-            self.update_step_status(step_id, "COMPLETED", {"response_length": len(response)})
-            logger.info(f"Endpoint task {task_id} completed.")
+            if _blender_build_error:
+                self.update_step_status(step_id, "FAILED", {"error": _blender_build_error})
+                logger.warning(f"Endpoint task {task_id} failed: {_blender_build_error}")
+            else:
+                self.update_step_status(step_id, "COMPLETED", {"response_length": len(response)})
+                logger.info(f"Endpoint task {task_id} completed.")
             market_quote_payload = quote if (ticker_symbol and quote.get("price")) else None
-            return {
+            result = {
                 "response": response,
                 "model_used": model_id,
                 "used_web": bool(web_context),
                 "market_quote": market_quote_payload,
             }
+            if _blender_result is not None:
+                from core.blender_pipeline.progressive_v2.outcome_policy import TaskDisposition, task_disposition
+                _final_disposition = task_disposition(_blender_result.completion_status)
+                result.update({
+                    "completion_status": _blender_result.completion_status.value,
+                    "task_outcome": _final_disposition.value,
+                    "ok": _final_disposition is not TaskDisposition.NOT_DONE,
+                    "outcome": _blender_result.outcome.to_dict() if _blender_result.outcome else None,
+                })
+            if _blender_build_error:
+                result.update({"build_status": "failed", "error": _blender_build_error})
+                if _blender_result is None:
+                    from core.blender_pipeline.progressive_v2.outcome_policy import TaskDisposition
+                    defects = list(getattr(_blender_exception, "defects", []))
+                    result.update({
+                        "completion_status": "failed",
+                        "task_outcome": TaskDisposition.NOT_DONE.value,
+                        "ok": False,
+                        "outcome": {"status": "failed", "defects": defects},
+                    })
+            return result
 
         except Exception as e:
             self.update_step_status(step_id, "FAILED", {"error": str(e)})
